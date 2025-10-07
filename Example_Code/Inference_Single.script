@@ -1,0 +1,19 @@
+#!/bin/bash
+#SBATCH --partition=bar_gpu
+#SBATCH --ntasks=1
+#SBATCH --nodes=1 
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=21
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=rbaiman.earth@gmail.com
+#SBATCH --output=Inference_job_%A_%a.out
+#SBATCH --array=0-2
+
+# Load your conda environment if needed
+source ~/.bashrc
+conda activate earth2studio
+# Set the working directory
+cd /home/C837824079/Project1
+
+# Run the Python script (optionally pass SLURM_ARRAY_TASK_ID if needed)
+python Inference_Single.py $SLURM_ARRAY_TASK_ID
