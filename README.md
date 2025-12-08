@@ -23,3 +23,13 @@ pip install ruamel.yaml
 pip install --no-deps nvidia-modulus
 conda install ipykernel
 ```
+
+```
+potential new earth2studio directory:
+conda create -n e2s-env python=3.12
+conda activate e2s-env
+pip3 install torch torchvision
+conda install numpy scipy pandas matplotlib
+conda install -c conda-forge xarray dask netCDF4 bottleneck
+pip install cmocean cartopy earth2studio
+```
