@@ -1,37 +1,35 @@
-# Running inference using Earth2Studio
+# Inference examples
 
-### environment setup *specific to BU SCC*
-As recommended from https://nvidia.github.io/earth2studio/v/0.10.0/userguide/about/install.html#install-using-uv-recommended:
-```
-conda create -n earth2studio_new python=3.12
-conda activate earth2studio_new
-pip install uv
-export UV_CACHE_DIR="/projectnb/eb-general/wade/uv_cache"
-mkdir earth2studio-project && cd earth2studio-project
-uv init --python=3.12
-uv add "earth2studio @ git+https://github.com/NVIDIA/earth2studio.git@0.10.0"
-uv add earth2studio --extra fcn
-```
-What I ran: (nearly identical, just different location of my uv project)
-```
-conda create -n earth2studio_new python=3.12
-conda activate earth2studio_new
-pip install uv
-export UV_CACHE_DIR="/projectnb/eb-general/wade/uv_cache"
-uv init --python=3.12
-uv add "earth2studio @ git+https://github.com/NVIDIA/earth2studio.git@0.10.0"
-uv add earth2studio --extra fcn
+This folder contains inference scripts for running SFNO forecasts with earth2studio. The `new_package_versions/Inference_Example.py` script mirrors the legacy `old_package_versions` workflow while targeting earth2studio 0.10.x.
+
+## Running without CLI flags (batch-friendly)
+Edit the `DEFAULT_CONFIG` block near the top of `new_package_versions/Inference_Example.py` to set your start time, checkpoint location, output path, and variable list. Once those values are saved, launch the script without any flags (e.g., inside a SLURM `sbatch` script):
+
+```bash
+python Example_Code/inference/new_package_versions/Inference_Example.py
 ```
 
-- additional dependencies for specific models: https://nvidia.github.io/earth2studio/v/0.10.0/userguide/about/install.html#prognostics 
-- the UV cache directory resets to be the home directory on the BU SCC after each session ends, so you may want to add the export UV_CACHE_DIR line to your .bashrc file
+Argparse will see no command-line inputs and will run entirely from `DEFAULT_CONFIG`, so you do not need to type flags each time.
 
-### Directory structure
+## Running with CLI overrides
+If you prefer to pass arguments explicitly, any flag you provide will override the corresponding entry in `DEFAULT_CONFIG`:
+
+```bash
+python Example_Code/inference/new_package_versions/Inference_Example.py \
+  --start 2019-03-22T00:00:00 \
+  --steps 12 \
+  --init-data /path/to/Initialize_2019_03_22T00_nsteps12.nc \
+  --checkpoint-dir /path/to/checkpoints \
+  --checkpoint-name ckpt_mp0_epoch1.tar \
+  --output /path/to/output/forecast.nc \
+  --variables msl tcwv \
+  --ema
 ```
-inference/
-  ├── old_package_versions/  
-```
 
-old_package_versions/
-- contains code compatible with earth2studio 0.7.0 and makani 0.1.0
+## How argument parsing works
+- `DEFAULT_CONFIG` holds the in-code defaults that mirror the original batch-oriented script.
+- When the script starts, it checks for a passed `InferenceConfig`; otherwise, argparse consumes the CLI flags.
+- Any missing flags fall back to the values in `DEFAULT_CONFIG`, so you can combine both approaches (for example, keep all defaults but change `--checkpoint-name` on the command line).
 
+## Outputs
+The script loads your initial NetCDF, runs deterministic inference, converts earth2studio `time` and `lead_time` into usable `valid_time` coordinates, and writes the final forecast step to the requested NetCDF path (creating parent directories if needed).
