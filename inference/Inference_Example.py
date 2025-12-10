@@ -23,9 +23,15 @@ from earth2studio.data import DataArrayFile
 from earth2studio.io import ZarrBackend
 from earth2studio.models.auto import Package
 
- # TODO SEE HOW THESE FILES NEED TO BE CHANGED FOR NEW EARTH2STUDIO VERSION
-from deterministic_update import deterministic 
-from SFNO_update import SFNO 
+# # start with basic inference -- no edits to backend code 
+# # - using best ckpt and save all vars#
+
+# # TODO ONCE RUNNING INFERENCE - CHECK HOW THESE FUNCTIONS HAVE CHANGED IN THE NEW API, AND WHETHER OUR EDITS NEED TO BE CHANGED 
+# from deterministic_update import deterministic # vars -- less important
+# from SFNO_update import SFNO  # checkpoint access -- most important
+# take really diligent notes -- specific package versions
+# - get a yaml of the env with versions!!!
+
 
 @dataclass
 class InferenceConfig:
@@ -49,7 +55,7 @@ DEFAULT_CONFIG = InferenceConfig(
     init_data=Path("/projectnb/eb-general/wade/sfno/inference_runs/Ian/Initialize_data/Initialize_2019_08_27T00_nsteps20.nc"),
     checkpoint_dir=Path("/projectnb/eb-general/shared_data/data/processed/FourCastNet_sfno/Checkpoints_SFNO/sfno_linear_74chq_sc3_layers8_edim384_dt6h_wstgl2/v0.1.0-seed999/training_checkpoints/"), # TODO CHECK IF THIS PATH NEEDS TO HAVE ADDITIONAL DIRECTORY TO THE MULTISTEP OR NON MULTISTEP DIR + seed + training_checkpoints
     checkpoint_name="ckpt_mp0_epoch1.tar",
-    output=Path("/projectnb/eb-general/wade/sfno/inference_runs/sandbox/"), # todo  fill in
+    output=Path("/projectnb/eb-general/wade/sfno/inference_runs/sandbox/"), # todo  fill in with desired output path?? or make it just output to dir + filename
     variables=['msl'],
     ema=False,
 )
