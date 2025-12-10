@@ -1,6 +1,6 @@
 # Running inference using Earth2Studio
 
-This folder contains inference scripts for running SFNO forecasts with earth2studio. The `new_package_versions/Inference_Example.py` script mirrors the legacy `old_package_versions` workflow while targeting earth2studio 0.10.x.
+This folder contains inference scripts for running SFNO forecasts with earth2studio 0.10.0.
 
 ## Environment setup *specific to BU SCC*
 ```
