@@ -26,4 +26,6 @@ source ~/.bashrc
 echo $UV_CACHE_DIR # to verify it worked!
 ```
 
+Notes:
+- from the SFNO installation instructions: makani v0.2.0 is installed from the specific commit even though earth2studio v0.10.0 is compatible with makani 0.2.1. Keep this in mind, since we have to edit `makani/models/model_package.py` for checkpoint selection, and I noticed that this function changed between makani 0.2.0 and 0.2.1 (see comparison here: https://github.com/NVIDIA/makani/compare/v0.2.0...v0.2.1)
 
