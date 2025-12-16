@@ -1,4 +1,7 @@
-
+# --------------------------------------- #
+# The following code is sourced from https://github.com/NVIDIA/makani/blob/v0.2.0/makani/models/model_package.py (makani v0.2.0)
+# since SFNO installation instructions install makani v0.2.0 from the specific commit, I am going to make my edits to that commit's model_package.py, not the latest version (v0.2.1) which has some minor changes - Annabel 12/15/25
+# --------------------------------------- #
 
 # SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
@@ -16,7 +19,7 @@
 # limitations under the License.
 
 """
-Model package for easy inference/packaging. Model packages contain all the necessary data to 
+Model package for easy inference/packaging. Model packages contain all the necessary data to
 perform inference and its interface is compatible with earth2mip
 """
 import os
@@ -26,17 +29,33 @@ import jsbeautifier
 import numpy as np
 import torch
 from makani.utils.YParams import ParamsBase
+from makani.utils.driver import Driver
 from makani.third_party.climt.zenith_angle import cos_zenith_angle
-
+from makani.utils.dataloaders.data_helpers import get_data_normalization
 from makani.models import model_registry
-
 import datetime
-
 import logging
+
+
+logger = logging.getLogger(__name__)
+
+
+
 class LocalPackage:
     """
     Implements the earth2mip/modulus Package interface.
     """
+
+    # These define the model package in terms of where makani expects the files to be located
+    THIS_MODULE = "makani.models.model_package"
+    # MODEL_PACKAGE_CHECKPOINT_PATH = "training_checkpoints/best_ckpt_mp0.tar" ### Annabel's edits: commenting this out ###
+    MINS_FILE = "mins.npy"
+    MAXS_FILE = "maxs.npy"
+    MEANS_FILE = "global_means.npy"
+    STDS_FILE = "global_stds.npy"
+    OROGRAPHY_FILE = "orography.nc"
+    LANDMASK_FILE = "land_mask.nc"
+    SOILTYPE_FILE = "soil_type.nc"
 
     def __init__(self, root):
         self.root = root
@@ -44,15 +63,49 @@ class LocalPackage:
     def get(self, path):
         return os.path.join(self.root, path)
 
+    ### Annabel's edits ###
+    # ERROR WITH THIS VERSION (FROM makani v0.2.0)
+    # @staticmethod
+    # def _load_static_data(root, params):
+    #     if params.get("add_orography", False):
+    #         params.orography_path = os.path.join(root, self.OROGRAPHY_FILE)
+    #     if params.get("add_landmask", False):
+    #         params.landmask_path = os.path.join(root, self.LANDMASK_FILE)
+    #     if params.get("add_soiltype", False):
+    #         params.soiltype_path = os.path.join(root, self.SOILTYPE_FILE)
 
-logger = logging.getLogger(__name__)
+    #     # alweays load all normalization files
+    #     if params.get("global_means_path", None) is not None:
+    #         params.global_means_path = os.path.join(root, self.MEANS_FILE)
+    #     if params.get("global_stds_path", None) is not None:
+    #         params.global_stds_path = os.path.join(root, self.STDS_FILE)
+    #     if params.get("min_path", None) is not None:
+    #         params.min_path = os.path.join(root, self.MINS_FILE)
+    #     if params.get("max_path", None) is not None:
+    #         params.max_path = os.path.join(root, self.MAXS_FILE)
 
+    ### TRYING makani v0.2.1. BELOW ###
+    @staticmethod
+    def _load_static_data(package, params):
+        if params.get("add_orography", False):
+            params.orography_path = package.get(LocalPackage.OROGRAPHY_FILE)
+        if params.get("add_landmask", False):
+            params.landmask_path = package.get(LocalPackage.LANDMASK_FILE)
+        if params.get("add_soiltype", False):
+            params.soiltype_path = package.get(LocalPackage.SOILTYPE_FILE)
 
-# MODEL_PACKAGE_CHECKPOINT_PATH = "training_checkpoints/best_ckpt_mp0.tar"
-MINS_FILE = "mins.npy"
-MAXS_FILE = "maxs.npy"
-MEANS_FILE = "global_means.npy"
-STDS_FILE = "global_stds.npy"
+        # alweays load all normalization files
+        if params.get("global_means_path", None) is not None:
+            params.global_means_path = package.get(LocalPackage.MEANS_FILE)
+        if params.get("global_stds_path", None) is not None:
+            params.global_stds_path = package.get(LocalPackage.STDS_FILE)
+        if params.get("min_path", None) is not None:
+            params.min_path = package.get(LocalPackage.MINS_FILE)
+        if params.get("max_path", None) is not None:
+            params.max_path = package.get(LocalPackage.MAXS_FILE)
+
+    ### END Annabel's edits ###
+
 
 class ModelWrapper(torch.nn.Module):
     """
@@ -78,51 +131,119 @@ class ModelWrapper(torch.nn.Module):
         nlat = params.img_shape_x
         nlon = params.img_shape_y
 
-        self.lats = 90 - 180 * np.arange(nlat) / (nlat - 1)
-        self.lons = 360 * np.arange(nlon) / nlon
-        self.add_zenith = params.add_zenith
+        # configure lats
+        if "lat" in self.params:
+            self.lats = np.asarray(self.params.lat)
+        else:
+            self.lats = np.linspace(90, -90, nlat, endpoint=True)
 
-    def forward(self, x, time):
+        # configure lons
+        if "lon" in self.params:
+            self.lons =	np.asarray(self.params.lon)
+        else:
+            self.lons = np.linspace(0, 360, nlon, endpoint=False)
+
+        # zenith angle
+        self.add_zenith = params.get("add_zenith", False)
         if self.add_zenith:
-            lon_grid, lat_grid = np.meshgrid(self.lons, self.lats)
-            cosz = cos_zenith_angle(time, lon_grid, lat_grid)
+            self.lon_grid, self.lat_grid = np.meshgrid(self.lons, self.lats)
+
+        # load the normalization files
+        bias, scale = get_data_normalization(self.params)
+
+        # convert them to torch
+        in_bias = torch.as_tensor(bias[:, self.params.in_channels]).to(torch.float32)
+        in_scale = torch.as_tensor(scale[:, self.params.in_channels]).to(torch.float32)
+        out_bias = torch.as_tensor(bias[:, self.params.out_channels]).to(torch.float32)
+        out_scale = torch.as_tensor(scale[:, self.params.out_channels]).to(torch.float32)
+
+        self.register_buffer("in_bias", in_bias)
+        self.register_buffer("in_scale", in_scale)
+        self.register_buffer("out_bias", out_bias)
+        self.register_buffer("out_scale", out_scale)
+
+    @property
+    def in_channels(self):
+        return self.params.get("channel_names", None)
+
+    @property
+    def out_channels(self):
+        return self.params.get("channel_names", None)
+
+    @property
+    def timestep(self):
+        return self.params.dt * self.params.dhours
+
+    def forward(self, x, time, normalized_data=True, replace_state=None):
+        if not normalized_data:
+            x = (x - self.in_bias) / self.in_scale
+
+        if self.add_zenith:
+            cosz = cos_zenith_angle(time, self.lon_grid, self.lat_grid)
             cosz = cosz.astype(np.float32)
-            z = torch.from_numpy(cosz).to(device=x.device)
+            z = torch.as_tensor(cosz).to(device=x.device)
             while z.ndim != x.ndim:
                 z = z[None]
-            x = torch.cat([x, z], dim=1)
+            self.model.preprocessor.cache_unpredicted_features(None, None, xz=z, yz=None)
 
-        return self.model(x)
+        out = self.model(x, replace_state=replace_state)
 
-def _load_static_data(package, params):
-    if hasattr(params, "add_orography") and params.add_orography:
-        params.orography_path = package.get("orography.nc")
+        if not normalized_data:
+            out = out * self.out_scale + self.out_bias
 
-    if hasattr(params, "add_landmask") and params.add_landmask:
-        params.landmask_path = package.get("land_mask.nc")
+        return out
 
-    # a bit hacky - we should change this to correctly
-    if params.normalization == "zscore":
-        if hasattr(params, "global_means_path") and params.global_means_path is not None:
-            params.global_means_path = package.get(MEANS_FILE)
-        if hasattr(params, "global_stds_path") and params.global_stds_path is not None:
-            params.global_stds_path = package.get(STDS_FILE)
-    elif params.normalization == "minmax":
-        if hasattr(params, "min_path") and params.min_path is not None:
-            params.min_path = package.get(MINS_FILE)
-        if hasattr(params, "max_path") and params.max_path is not None:
-            params.max_path = package.get(MAXS_FILE)
-    else:
-        raise ValueError("Unknown normalization mode.")
 
-def load_model_package(package, checkpoint_name = "best_ckpt_mp0.tar",pretrained=True, device="cpu", EMA = False):
+def save_model_package(params):
+    """
+    Saves out a self-contained model-package.
+    The idea is to save anything necessary for inference beyond the checkpoints in one location.
+    """
+    # save out the current state of the parameters, make it human readable
+    config_path = os.path.join(params.experiment_dir, "config.json")
+    jsopts = jsbeautifier.default_options()
+    jsopts.indent_size = 2
+
+    with open(config_path, "w") as f:
+        msg = jsbeautifier.beautify(json.dumps(params.to_dict()), jsopts)
+        f.write(msg)
+
+    if params.get("add_orography", False):
+        shutil.copy(params.orography_path, os.path.join(params.experiment_dir, os.path.basename(params.orography_path)))
+
+    if params.get("add_landmask", False):
+        shutil.copy(params.landmask_path, os.path.join(params.experiment_dir, os.path.basename(params.landmask_path)))
+
+    if params.get("add_soiltype", False):
+        shutil.copy(params.soiltype_path, os.path.join(params.experiment_dir, os.path.basename(params.soiltype_path)))
+
+    # always save out all normalization files
+    if params.get("global_means_path", None) is not None:
+        shutil.copy(params.global_means_path, os.path.join(params.experiment_dir, os.path.basename(params.global_means_path)))
+    if params.get("global_stds_path", None) is not None:
+        shutil.copy(params.global_stds_path, os.path.join(params.experiment_dir, os.path.basename(params.global_stds_path)))
+    if params.get("min_path", None) is not None:
+        shutil.copy(params.min_path, os.path.join(params.experiment_dir, os.path.basename(params.min_path)))
+    if params.get("max_path", None) is not None:
+        shutil.copy(params.max_path, os.path.join(params.experiment_dir, os.path.basename(params.max_path)))
+
+    # write out earth2mip metadata.json
+    fcn_mip_data = {
+        "entrypoint": {"name": f"{LocalPackage.THIS_MODULE}:load_time_loop"},
+    }
+    with open(os.path.join(params.experiment_dir, "metadata.json"), "w") as f:
+        msg = jsbeautifier.beautify(json.dumps(fcn_mip_data), jsopts)
+        f.write(msg)
+
+
+# TODO: this is not clean and should be reworked to allow restoring from params + checkpoint file
+def load_model_package(package, checkpoint_name = "best_ckpt_mp0.tar", EMA = False, pretrained=True, device="cpu", multistep=False):
     """
     Loads model package and return the wrapper which can be used for inference.
     """
     path = package.get("config.json")
     params = ParamsBase.from_json(path)
-    logger.info(str(params.to_dict()))
-    _load_static_data(package, params)
+    LocalPackage._load_static_data(package.root, params)
 
     # assume we are not distributed
     # distributed checkpoints might be saved with different params values
@@ -132,32 +253,85 @@ def load_model_package(package, checkpoint_name = "best_ckpt_mp0.tar",pretrained
     params.img_local_shape_y = params.img_shape_y
 
     # get the model and
-    model = model_registry.get_model(params).to(device)
+    model = model_registry.get_model(params, multistep=multistep).to(device)
 
     if pretrained:
+        ### Annabel's edits: ###
+        # best_checkpoint_path = package.get(LocalPackage.MODEL_PACKAGE_CHECKPOINT_PATH)
+        # Driver.restore_from_checkpoint(best_checkpoint_path, model)
         if EMA:
-            best_checkpoint_path = package.get("EMA_training_checkpoints_9/" + checkpoint_name)
+            checkpoint_path = package.get("EMA_training_checkpoints_9/" + checkpoint_name)
         else:
-            best_checkpoint_path = package.get("training_checkpoints/" + checkpoint_name)
-        # critical that this map_location be cpu, rather than the device to
-        # avoid out of memory errors.
-        checkpoint = torch.load(best_checkpoint_path, map_location=device, weights_only=False)
-        state_dict = checkpoint["model_state"]
-        torch.nn.modules.utils.consume_prefix_in_state_dict_if_present(state_dict, "module.")
-        model.load_state_dict(state_dict, strict=True)
+            checkpoint_path = package.get("training_checkpoints/" + checkpoint_name)
+        Driver.restore_from_checkpoint(checkpoint_path, model)
 
     model = ModelWrapper(model, params=params)
 
     # by default we want to do evaluation so setting it to eval here
-    # 1-channel difference in training/eval mode
     model.eval()
 
     return model
 
 
+def load_time_loop(package, device=None, time_step_hours=None, checkpoint_name = "best_ckpt_mp0.tar", EMA=False):
+    """This function loads an earth2mip TimeLoop object that
+    can be used for inference.
+
+    A TimeLoop encapsulates normalization, regridding, and other logic, so is a
+    very minimal interface to expose to a framework like earth2mip.
+
+    See https://github.com/NVIDIA/earth2mip/blob/main/docs/concepts.rst
+    for more info on this interface.
+    """
+
+    from earth2mip.networks import Inference
+    from earth2mip.grid import equiangular_lat_lon_grid
+    from physicsnemo.distributed.manager import DistributedManager
+
+    config = package.get("config.json")
+    params = ParamsBase.from_json(config)
+
+    if params.in_channels != params.out_channels:
+        raise NotImplementedError("Non-equal input and output channels are not implemented yet.")
+
+    names = [params.data_channel_names[i] for i in params.in_channels]
+    params.min_path = package.get(LocalPackage.MINS_FILE)
+    params.max_path = package.get(LocalPackage.MAXS_FILE)
+    params.global_means_path = package.get(LocalPackage.MEANS_FILE)
+    params.global_stds_path = package.get(LocalPackage.STDS_FILE)
+
+    center, scale = get_data_normalization(params)
+
+    model = load_model_package(package, pretrained=True, device=device, checkpoint_name=checkpoint_name, EMA=EMA)
+    shape = (params.img_crop_shape_x, params.img_crop_shape_y)
+
+    # TODO: insert a check to see if the grid e2mip computes is the same that makani uses
+    grid = equiangular_lat_lon_grid(nlat=params.img_crop_shape_x, nlon=params.img_crop_shape_y, includes_south_pole=True)
+
+    if time_step_hours is None:
+        hour = datetime.timedelta(hours=1)
+        time_step = hour * params.get("dt", 6)
+    else:
+        time_step = datetime.timedelta(hours=time_step_hours)
+
+    # Here we use the built-in class earth2mip.networks.Inference
+    # will later be extended to use the makani inferencer
+    inference = Inference(
+        model=model,
+        channel_names=names,
+        center=center[:, params.in_channels],
+        scale=scale[:, params.out_channels],
+        grid=grid,
+        n_history=params.n_history,
+        time_step=time_step,
+    )
+    inference.to(device)
+    return inference
 
 
-
+# --------------------------------------- #
+# The following code is sourced from https://github.com/NVIDIA/earth2studio/blob/main/earth2studio/models/px/sfno.py (earth2studio v0.10.0)
+# --------------------------------------- #
 
 # SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
@@ -174,23 +348,44 @@ def load_model_package(package, checkpoint_name = "best_ckpt_mp0.tar",pretrained
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import json
+import fnmatch
 import os
 from collections import OrderedDict
 from collections.abc import Generator, Iterator
-from zoneinfo import ZoneInfo
+from datetime import datetime
 
 import numpy as np
 import torch
-
 
 from earth2studio.models.auto import AutoModelMixin, Package
 from earth2studio.models.batch import batch_coords, batch_func
 from earth2studio.models.px.base import PrognosticModel
 from earth2studio.models.px.utils import PrognosticMixin
-from earth2studio.utils import check_extra_imports, handshake_coords, handshake_dim
+from earth2studio.utils import handshake_coords, handshake_dim
+from earth2studio.utils.imports import (
+    OptionalDependencyFailure,
+    check_optional_dependencies,
+)
 from earth2studio.utils.time import timearray_to_datetime
 from earth2studio.utils.type import CoordSystem
+
+try:
+    from makani.models import model_registry
+    # from makani.models.model_package import (
+    #     LocalPackage,
+    #     ModelWrapper,
+    #     load_model_package,
+    # ) ## WE EDIT THESE FUNCTIONS ABOVE, SO DON'T IMPORT THEM
+    from makani.utils.driver import Driver
+    from makani.utils.YParams import ParamsBase
+except ImportError:
+    OptionalDependencyFailure("sfno")
+    load_model_package = None
+    Driver = None
+    ParamsBase = None
+    LocalPackage = None
+    model_registry = None
+    ModelWrapper = None
 
 VARIABLES = [
     "u10m",
@@ -269,9 +464,7 @@ VARIABLES = [
 ]
 
 
-
-
-# @check_extra_imports("sfno", [load_model_package])
+@check_optional_dependencies()
 class SFNO(torch.nn.Module, AutoModelMixin, PrognosticMixin):
     """Spherical Fourier Operator Network global prognostic model.
     Consists of a single model with a time-step size of 6 hours.
@@ -302,14 +495,10 @@ class SFNO(torch.nn.Module, AutoModelMixin, PrognosticMixin):
     def __init__(
         self,
         core_model: torch.nn.Module,
-        center: torch.Tensor,
-        scale: torch.Tensor,
         variables: np.array = np.array(VARIABLES),
     ):
         super().__init__()
         self.model = core_model
-        self.register_buffer("center", center)
-        self.register_buffer("scale", scale)
         self.variables = variables
         if "2d" in self.variables:
             self.variables[self.variables == "2d"] = "d2m"
@@ -376,8 +565,6 @@ class SFNO(torch.nn.Module, AutoModelMixin, PrognosticMixin):
         )
         return output_coords
 
-
-
     @classmethod
     def load_default_package(cls) -> Package:
         """Load prognostic package"""
@@ -391,14 +578,10 @@ class SFNO(torch.nn.Module, AutoModelMixin, PrognosticMixin):
         package.root = os.path.join(package.root, "sfno_73ch_small")
         return package
 
-
-
-
-
     @classmethod
-    # @check_extra_imports("sfno", [load_model_package])
+    @check_optional_dependencies()
     def load_model(
-        cls, package: Package, checkpoint_name:str = "best_ckpt_mp0.tar", variables: list = VARIABLES, EMA = False
+        cls, package: Package, checkpoint_name:str = "best_ckpt_mp0.tar", variables: list = VARIABLES, device: str = "cpu", EMA=False,
     ) -> PrognosticModel:
         """Load prognostic from package
 
@@ -414,29 +597,80 @@ class SFNO(torch.nn.Module, AutoModelMixin, PrognosticMixin):
         PrognosticModel
             Prognostic model
         """
-        if EMA:
-            model = load_model_package(package = package, checkpoint_name = checkpoint_name, EMA = True)
+
+        # Makani load_model_package
+        path = package.resolve("config.json")
+        params = ParamsBase.from_json(path)
+
+        # Set global_means_path and global_stds_path
+        params.global_means_path = package.resolve("global_means.npy")
+        params.global_stds_path = package.resolve("global_stds.npy")
+        # Need to manually set min and max paths to none.
+        params.min_path = None
+        params.max_path = None
+
+        # Need to manually set in and out channels to all variables.
+        if params.channel_names is None:
+            params.channel_names = variables
         else:
-            model = load_model_package(package = package, checkpoint_name = checkpoint_name, EMA = False)
+            variables = params.channel_names
+        params.in_channels = np.arange(len(variables))
+        params.out_channels = np.arange(len(variables))
+
+        LocalPackage._load_static_data(package, params)
+
+        # assume we are not distributed
+        # distributed checkpoints might be saved with different params values
+        params.img_local_offset_x = 0
+        params.img_local_offset_y = 0
+        params.img_local_shape_x = params.img_shape_x
+        params.img_local_shape_y = params.img_shape_y
+
+        # set grid type to sinusoidal without cosine features added in makani 0.2.0
+        if params.get("add_cos_to_grid", None) is None:
+            params.add_cos_to_grid = False
+
+        # get the model
+        model = model_registry.get_model(params, multistep=False).to(device)
+
+        ### Annabel's edits: ###
+        # best_checkpoint_path = package.get(LocalPackage.MODEL_PACKAGE_CHECKPOINT_PATH)
+        
+        # Load checkpoint
+        if EMA:
+            checkpoint_path = package.get("EMA_training_checkpoints_9/" + checkpoint_name)
+        else:
+            checkpoint_path = package.get("training_checkpoints/" + checkpoint_name)
+
+        ### End Annabel's edits ###
+
+        checkpoint = torch.load(
+            checkpoint_path, weights_only=False, map_location=device
+        )
+        state_dict = checkpoint["model_state"]
+        torch.nn.modules.utils.consume_prefix_in_state_dict_if_present(
+            state_dict, "module."
+        )
+
+        # Resize model.blocks filters for some reason
+        keys_to_resize = fnmatch.filter(
+            state_dict.keys(), "model.blocks.*.filter.filter.weight"
+        )
+        for key in keys_to_resize:
+            state_dict[key] = state_dict[key].unsqueeze(0)
+
+        model.load_state_dict(state_dict)
+
+        # Wrap model
+        model = ModelWrapper(model, params=params)
+
+        # Set model to eval mode
         model.eval()
 
         # Load variables
-        config_path = package.get("config.json")
-        with open(config_path) as f:
-            variables = json.load(f)["channel_names"]
+        variables = np.array(model.params.channel_names)
 
-        # Load center and std normalizations
-        local_center = torch.Tensor(np.load(package.resolve("global_means.npy")))[
-            :, : len(variables)
-        ]
-        local_std = torch.Tensor(np.load(package.resolve("global_stds.npy")))[
-            :, : len(variables)
-        ]
-        return cls(
-            model, center=local_center, scale=local_std, variables=np.array(variables)
-        )
-
-
+        return cls(model, variables=variables)
 
     @torch.inference_mode()
     def _forward(
@@ -445,22 +679,18 @@ class SFNO(torch.nn.Module, AutoModelMixin, PrognosticMixin):
         coords: CoordSystem,
     ) -> tuple[torch.Tensor, CoordSystem]:
         output_coords = self.output_coords(coords)
-        x = x.squeeze(2)
-        x = (x - self.center) / self.scale
+        x = x.clone().squeeze(2)
         for j, _ in enumerate(coords["batch"]):
             for i, t in enumerate(coords["time"]):
                 # https://github.com/NVIDIA/modulus-makani/blob/933b17d5a1ebfdb0e16e2ebbd7ee78cfccfda9e1/makani/third_party/climt/zenith_angle.py#L197
                 # Requires time zone data
                 t = [
-                    dt.replace(tzinfo=ZoneInfo("UTC"))
+                    datetime.fromisoformat(dt.isoformat() + "+00:00")
                     for dt in timearray_to_datetime(t + coords["lead_time"])
                 ]
-                x[j, i : i + 1] = self.model(x[j, i : i + 1], t)
-        x = self.scale * x + self.center
+                x[j, i : i + 1] = self.model(x[j, i : i + 1], t, normalized_data=False)
         x = x.unsqueeze(2)
         return x, output_coords
-
-
 
     @batch_func()
     def __call__(
@@ -484,8 +714,6 @@ class SFNO(torch.nn.Module, AutoModelMixin, PrognosticMixin):
         """
         return self._forward(x, coords)
 
-
-
     @batch_func()
     def _default_generator(
         self, x: torch.Tensor, coords: CoordSystem
@@ -501,8 +729,6 @@ class SFNO(torch.nn.Module, AutoModelMixin, PrognosticMixin):
             # Rear hook
             x, coords = self.rear_hook(x, coords)
             yield x, coords.copy()
-
-
 
     def create_iterator(
         self, x: torch.Tensor, coords: CoordSystem
