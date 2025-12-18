@@ -27,13 +27,17 @@ echo $UV_CACHE_DIR # to verify it worked!
 ```
 
 ## Directory setup:
-`deterministic_update.py`
+##### `deterministic_update.py`
+
 - rewrites the earth2studio deterministic function to handle saving only specific variables in the output.
-`SFNO_update.py`
+
+##### `SFNO_update.py`
 - rewrites the earth2studio SFNO code (and some relevant makani code) to handle loading specific SFNO checkpoints and running inference with them.
-`utils.py`
+
+##### `utils.py`
 - helper functions primarily used for creating Initialization files.
-`sandbox-old-code.ipynb`
+
+##### `sandbox-old-code.ipynb`
 - sandbox notebook with inference running. Scaled-up version coming soon.
     - arguments i
 
