@@ -17,7 +17,9 @@ from earth2studio.utils.time import to_time_array
 from loguru import logger
 from tqdm import tqdm
 
-# earth2studio 0.10.0 deterministic func: https://nvidia.github.io/earth2studio/v/0.7.0/_modules/earth2studio/run.html#deterministic
+# earth2studio 0.7.0 deterministic func: https://nvidia.github.io/earth2studio/v/0.7.0/_modules/earth2studio/run.html#deterministic
+# earth2studio 0.10.0 deterministic func: https://nvidia.github.io/earth2studio/_modules/earth2studio/run.html#deterministic
+# The function did not change between these two versions. - Annabel 12/18/25
 
 def deterministic(
     time: list[str] | list[datetime] | list[np.datetime64],
