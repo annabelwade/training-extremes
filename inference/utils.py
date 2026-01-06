@@ -46,6 +46,31 @@ def open_hdf5(*, path, f=None, metadata):
     ds = ds.assign_attrs(metadata["attrs"], path=path)
     return ds
 
+def create_initialization_file(init_timestep=None, valid_timestep=None, init_fp='', n_steps = 20,):
+    # Timesteps should be in string format yyyy-mm-ddTHH:MM:SS
+
+    if valid_timestep is None:
+        valid_timestep = (datetime.fromisoformat(init_timestep) + timedelta(hours = n_steps*6)).isoformat() 
+    elif init_timestep is None:
+        init_timestep = (datetime.fromisoformat(valid_timestep) - timedelta(hours = n_steps*6)).isoformat()
+
+    # Filepath for ERA5 json data
+    SFNO_dir = "/projectnb/eb-general/shared_data/data/processed/FourCastNet_sfno/ERA5_SFNO/testing_data"
+    data_fp = os.path.join(SFNO_dir, 'data.json')
+
+    print(f"Selecting timestep {init_timestep} to {valid_timestep}")
+
+    # Open and load the JSON file
+    with open(data_fp, 'r') as f:
+        labels = json.load(f)
+
+    # open initial conditions from stored ERA data
+    year_of_timestep = datetime.fromisoformat(init_timestep).year
+    data_create = open_hdf5(path = os.path.join(SFNO_dir, str(year_of_timestep)+'.h5'), metadata = labels)
+    data_create = data_create.sel(time = [init_timestep, valid_timestep]) # this just selects the first and last time in the time range
+    data_create = data_create.rename({"channel": "variable"})
+    data_create.to_netcdf(init_fp)
+
 
 @dataclass
 class InferenceConfig:
