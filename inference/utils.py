@@ -16,6 +16,7 @@ import sys
 from typing import Iterable, Sequence
 import json
 
+
 def filename_to_year(path: str) -> int:
     # Extracts the year from the filename, assuming the filename starts with a 4-digit year.
     filename = os.path.basename(path)
@@ -69,4 +70,3 @@ def create_initialization_file(start_timestep=None, valid_timestep=None, init_fp
     # Make dir of init_fp
     os.makedirs(os.path.dirname(init_fp), exist_ok=True)
     data_create.to_netcdf(init_fp)
-

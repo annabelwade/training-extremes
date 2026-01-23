@@ -37,6 +37,9 @@ echo $UV_CACHE_DIR # to verify it worked!
 ##### `utils.py`
 - helper functions primarily used for creating Initialization files, and opening files.
 
+#### `plot_metric_utils.py`
+- helper functions for plotting and metrics (mse, IoU, amplitude) from inference runs.
+
 ##### `inference.py`
 - main script to run SFNO inference with earth2studio.
 
