@@ -47,116 +47,26 @@ def open_hdf5(*, path, f=None, metadata):
     ds = ds.assign_attrs(metadata["attrs"], path=path)
     return ds
 
-def create_initialization_file(init_timestep=None, valid_timestep=None, init_fp='', n_steps = 20,):
-    # Timesteps should be in string format yyyy-mm-ddTHH:MM:SS
-
-    if valid_timestep is None:
-        valid_timestep = (datetime.fromisoformat(init_timestep) + timedelta(hours = n_steps*6)).isoformat() 
-    elif init_timestep is None:
-        init_timestep = (datetime.fromisoformat(valid_timestep) - timedelta(hours = n_steps*6)).isoformat()
+def create_initialization_file(start_timestep=None, valid_timestep=None, init_fp='',):
+    # Timesteps are in iso string format yyyy-mm-ddTHH:MM:SS
 
     # Filepath for ERA5 json data
     SFNO_dir = "/projectnb/eb-general/shared_data/data/processed/FourCastNet_sfno/ERA5_SFNO/testing_data"
     data_fp = os.path.join(SFNO_dir, 'data.json')
 
-    print(f"Selecting timestep {init_timestep} to {valid_timestep}")
+    print(f"Selecting timestep {start_timestep} to {valid_timestep}")
 
     # Open and load the JSON file
     with open(data_fp, 'r') as f:
         labels = json.load(f)
 
     # open initial conditions from stored ERA data
-    year_of_timestep = datetime.fromisoformat(init_timestep).year
+    year_of_timestep = datetime.fromisoformat(start_timestep).year
     data_create = open_hdf5(path = os.path.join(SFNO_dir, str(year_of_timestep)+'.h5'), metadata = labels)
-    data_create = data_create.sel(time = [init_timestep, valid_timestep]) # this just selects the first and last time in the time range
+    data_create = data_create.sel(time = [start_timestep, valid_timestep]) # this just selects the first and last time in the time range
     data_create = data_create.rename({"channel": "variable"})
 
     # Make dir of init_fp
     os.makedirs(os.path.dirname(init_fp), exist_ok=True)
     data_create.to_netcdf(init_fp)
-
-
-# @dataclass
-# class InferenceConfig:
-#     """Configuration container for running the inference script."""
-
-#     start: str = "2019-09-03T00:00:00" # fix that this has to be a different format from the initialize time string
-#     steps: int = 4
-#     init_data: Path = Path(
-#         "/projectnb/eb-general/wade/sfno/inference_runs/Ian/Initialize_data/Initialize_2019_09_03T00_nsteps4.nc"
-#     )
-#     checkpoint_dir: Path = Path(
-#         "/projectnb/eb-general/shared_data/data/processed/FourCastNet_sfno/Checkpoints_SFNO/"
-#         "sfno_linear_74chq_sc3_layers8_edim384_dt6h_wstgl2/v0.1.0-seed999/"
-#     )  # TODO CHECK IF THIS PATH NEEDS TO HAVE ADDITIONAL DIRECTORY TO THE MULTISTEP OR NON MULTISTEP DIR + seed + training_checkpoints
-#     checkpoint_name: str = "ckpt_mp0_epoch1.tar"  # for now, the code will just grab best ckpt, not this one.
-#     output: Path = Path(
-#         "/projectnb/eb-general/wade/sfno/inference_runs/sandbox/best_ckpt_2019_09_04T00_nsteps4.nc"
-#     )  # todo make this automated to just take the directory, not the full path+name
-
-#     variables: list[str] | None = None
-#     ema: bool = False
-
-# def _parse_args(defaults: InferenceConfig, cli_args: Sequence[str] | None = None) -> InferenceConfig:
-#     """Parse CLI arguments while honoring editable in-file defaults.
-
-#     Parameters
-#     ----------
-#     defaults : InferenceConfig
-#         Baseline values to use when a flag is omitted. Edit ``DEFAULT_CONFIG``
-#         to change these defaults without typing flags.
-#     cli_args : Sequence[str] | None
-#         Argument vector to parse. When ``None`` (the common case), argparse
-#         inspects ``sys.argv``. Passing an explicit sequence is useful for
-#         programmatic invocation.
-#     """
-
-#     parser = argparse.ArgumentParser(description="Run SFNO inference with earth2studio 0.10.x")
-#     parser.add_argument(
-#         "--start",
-#         default=defaults.start,
-#         help="ISO8601 start datetime for the forecast (e.g. 2019-03-22T00:00:00)",
-#     )
-#     parser.add_argument("--steps", type=int, default=defaults.steps, help="Number of 6-hour steps to forecast")
-#     parser.add_argument(
-#         "--init-data", type=Path, default=defaults.init_data, help="Path to the preprocessed initial state NetCDF"
-#     )
-#     parser.add_argument(
-#         "--checkpoint-dir",
-#         type=Path,
-#         default=defaults.checkpoint_dir,
-#         help="Directory containing the SFNO checkpoints",
-#     )
-#     parser.add_argument(
-#         "--checkpoint-name",
-#         default=defaults.checkpoint_name,
-#         help="Checkpoint file name inside the checkpoint directory",
-#     )
-#     parser.add_argument(
-#         "--output",
-#         type=Path,
-#         default=defaults.output,
-#         help="Output NetCDF path for the final forecast timestep",
-#     )
-#     parser.add_argument(
-#         "--variables",
-#         nargs="*",
-#         default=defaults.variables,
-#         help="Optional list of variables to keep (defaults to all variables)",
-#     )
-#     parser.add_argument(
-#         "--ema",
-#         action="store_true",
-#         default=defaults.ema,
-#         help="Load EMA weights instead of the standard checkpoint",
-#     )
-
-#     args = parser.parse_args(args=cli_args)
-#     args_dict = vars(args)
-#     if args_dict.get("variables") == []:
-#         args_dict["variables"] = None
-
-#     return InferenceConfig(**args_dict)
-    
-
 

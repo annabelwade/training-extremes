@@ -26,7 +26,7 @@ source ~/.bashrc
 echo $UV_CACHE_DIR # to verify it worked!
 ```
 
-## Directory setup:
+## Directory contents:
 ##### `deterministic_update.py`
 
 - rewrites the earth2studio deterministic function to handle saving only specific variables in the output.
@@ -35,9 +35,22 @@ echo $UV_CACHE_DIR # to verify it worked!
 - rewrites the earth2studio SFNO code (and some relevant makani code) to handle loading specific SFNO checkpoints and running inference with them.
 
 ##### `utils.py`
-- helper functions primarily used for creating Initialization files.
+- helper functions primarily used for creating Initialization files, and opening files.
 
-##### `sandbox-old-code.ipynb`
-- sandbox notebook with inference running. Scaled-up version coming soon.
-    - arguments i
+##### `inference.py`
+- main script to run SFNO inference with earth2studio.
+
+#### `inference_job_arr.sh`
+- uses a job array to parallelize inference runs on BU SCC.
+
+#### `configs/`
+- contains .json config files for different experiments and inference runs.
+
+## Running inference
+To run inference, submit the `inference_job_arr.sh` script with a specified experiment number:
+```
+qsub inference_job_arr.sh <experiment_number>
+```
+- Ensure that the experiment number you provide corresponds to a valid configuration file with the desired settings in at `configs/expN.json` where `N` is the experiment number.
+- Not providing a number will default to experiment 2 (`configs/exp2.json`).
 

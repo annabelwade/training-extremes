@@ -1,6 +1,0 @@
-#Time         gpu    pwr  gtemp  mtemp     sm    mem    enc    dec    jpg    ofa  rxpci  txpci 
-#HH:MM:SS     Idx      W      C      C      %      %      %      %      %      %   MB/s   MB/s 
- 17:45:08       0    177     60     60     60     38      0      0      -      -     16      3 
- 17:45:08       1    215     54     56     60     38      0      0      -      -     16      3 
- 17:45:08       2    178     55     55     58     37      0      0      -      -     16      3 
- 17:45:08       3     43     39     38      0      0      0      0      -      -      0      0 
