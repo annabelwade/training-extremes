@@ -3,13 +3,13 @@
         "event_type": "atmospheric_river",
         "valid_timestep": "2022-12-27T00:00:00",
         "leadtimes_days": [3, 5, 7],
-        "variables_to_save": ["tcwv", "u700", "v700"],
+        "variables_to_save": ["tcwv", "u700", "v700", "z500"],
         "ema": false,
         "compute_ivt": true
     },
     "model_parameters": {
         "fine_tuning_start_epoch": 71,
-        "epochs_to_run": [2,4,6,8,10,12,14,16]
+        "epochs_to_run": "evens"
     },
     "paths": {
         "base_output_dir": "/projectnb/eb-general/wade/sfno/inference_runs/sandbox"

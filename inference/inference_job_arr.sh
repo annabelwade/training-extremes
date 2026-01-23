@@ -1,7 +1,7 @@
 #!/bin/bash -l
 
 # Set the time limit 
-#$ -l h_rt=01:00:00
+#$ -l h_rt=03:00:00
 
 # Name the job
 #$ -N inference_parallel
