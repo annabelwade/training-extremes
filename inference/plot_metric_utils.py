@@ -38,20 +38,24 @@ def calculate_weighted_mse(forecast, truth):
 def setup_figure_layout(num_plots):
     """Helper to handle the rows/columns math and figure initialization."""
     if num_plots > 12:
-        rows = num_plots // 5
+        print('plotting case 1')
+        rows = num_plots // 6 - 1
         cols = num_plots // rows + (num_plots % rows > 0)
-        fig_height = rows * 3.5
+        print('num rows:', rows, 'num cols:', cols, 'num plots:', num_plots)
+        fig_height = rows * 3
     elif num_plots > 9:
+        print('plotting case 2')
         rows = 2
         cols = math.ceil(num_plots / 2)
         fig_height = 6 
     else:
+        print('plotting case 3')
         rows = 1
         cols = num_plots
         fig_height = 6 if num_plots <= 4 else 3
     
     fig, ax = plt.subplots(
-        rows, cols, figsize=(18, fig_height), 
+        rows, cols, figsize=(20, fig_height), 
         subplot_kw={'projection': ccrs.PlateCarree()},
         constrained_layout=True
     )
@@ -85,6 +89,8 @@ def get_forecast_and_truth_data(experiment_number, ckpt_num, leadtime, var, boun
     truth_ds = truth_ds.isel(time=1).sel(variable=var)
     truth_ds_cropped = crop_spatial_bounds(truth_ds, bounding_box)
     truth_ds_cropped = truth_ds_cropped.to_dataarray().squeeze()
+
+    print(f'LOADED VALIDTIME {valid_timestep_str} VAR {var} LEADTIME {leadtime} ckpt {ckpt_num} FORECAST:', output_fp)
 
     return forecast_data, truth_ds_cropped
 
@@ -208,8 +214,13 @@ def render_panel(ax, background_data, title, cmap, vmin, vmax, extent, ckpts=[],
         )
 
         if contour_metrics:
-            # get largest contour path for metrics
-            mx, my = get_largest_path_from_contour(cs)
+            # Use invisible contourf (filled) to capture the boundary-aware geometry
+            # This ensures the polygon follows the box edges instead of cutting corners
+            cs_fill = ax.contourf(
+                c_data['lon'], c_data['lat'], c_data,
+                levels=[contour_val, np.inf], alpha=0, transform=ccrs.PlateCarree()
+            )
+            mx, my = get_largest_path_from_contour(cs_fill)
 
     # 3. Black Contour (Truth Overlay - optional)
     if truth_contour_data is not None and contour_val is not None:
@@ -219,7 +230,11 @@ def render_panel(ax, background_data, title, cmap, vmin, vmax, extent, ckpts=[],
         )
 
         if contour_metrics:
-            tx, ty = get_largest_path_from_contour(cs_truth)
+            cs_truth_fill = ax.contourf(
+                truth_contour_data['lon'], truth_contour_data['lat'], truth_contour_data,
+                levels=[contour_val, np.inf], alpha=0, transform=ccrs.PlateCarree()
+            )
+            tx, ty = get_largest_path_from_contour(cs_truth_fill)
 
     # 4. Calculate Metrics
     if contour_metrics and contour_val is not None:
@@ -304,11 +319,7 @@ def render_panel(ax, background_data, title, cmap, vmin, vmax, extent, ckpts=[],
         # Start from bottom and work up
         y_pos = 0.03
         y_step = 0.1
-        
-        # We want the order to match typical reading (MSE top, Err bottom) or stack up?
-        # The list was appended MSE -> IoU -> Err. 
-        # To display nicely: let's reverse iteration so MSE is at the top of the stack
-        for metric in reversed(metrics_list):
+        for metric in reversed(metrics_list): # reverse iteration so MSE is at the top of the stack
             t = ax.text(0.97, y_pos, metric['str'], 
                     transform=ax.transAxes, 
                     color='black', fontsize=11, 
@@ -347,14 +358,19 @@ def plot_Nckpts_1leadtime(leadtime = 5, ckpts=[1,30,70,90], experiment_number=1,
     
     # grab the valid time string from the truth file for the title
     truth_ds = xr.open_dataset(truth_fp)
-    truth_valid_time_str = str(truth_ds['time'].values[1]) 
-    truth_ds = truth_ds.isel(time=1).sel(variable=var)
+    print('LOADED INIT TIME', init_timestep_str, 'VAR', var, 'LEADTIME', leadtime, 'TRUTH:', truth_fp)
+    print(truth_ds['time'])
+    truth_time_ind = 1 # the truth for the valid time is at index 1
+    truth_valid_time_str = str(truth_ds['time'].values[truth_time_ind]) 
+    truth_ds = truth_ds.isel(time=truth_time_ind).sel(variable=var)
     truth_ds = crop_spatial_bounds(truth_ds, bounding_box)
 
     if experiment_number == 1:
-        valid_time_ind=2 
+        # valid_time_ind=2
+        # throw an error since experiment 1 is deprecated
+        raise ValueError("Experiment 1 is deprecated (valid_time_ind=2 not 0). Please use experiment_number=2 or higher.") 
     else:
-        valid_time_ind=0 
+        valid_time_ind=0 # the model forecast for the valid time is at index 0
 
     if error:
         # calculate difference
@@ -362,7 +378,9 @@ def plot_Nckpts_1leadtime(leadtime = 5, ckpts=[1,30,70,90], experiment_number=1,
         for ckpt_num in ckpts:
             output_fp = f"/projectnb/eb-general/wade/sfno/inference_runs/sandbox/Experiment{experiment_number}/{valid_timestep_str[:10]}/Checkpoint{ckpt_num}_{init_timestep_str}_nsteps{leadtime*4}.nc"
             ds = xr.open_dataset(output_fp)
+            print(f'LOADED VALIDTIME {valid_timestep_str} VAR {var} LEADTIME {leadtime} ckpt {ckpt_num} INIT_TIME {init_timestep_str} FORECAST:', output_fp)
             ds_cropped = crop_spatial_bounds(ds, bounding_box)
+            print()
             diff = ds_cropped[var].isel(valid_time=valid_time_ind) - truth_ds
             error_dict[ckpt_num] = diff
 
@@ -395,6 +413,10 @@ def plot_Nckpts_1leadtime(leadtime = 5, ckpts=[1,30,70,90], experiment_number=1,
         output_fp = f"/projectnb/eb-general/wade/sfno/inference_runs/sandbox/Experiment{experiment_number}/{valid_timestep_str[:10]}/Checkpoint{ckpt_num}_{init_timestep_str}_nsteps{leadtime*4}.nc"
         ds = xr.open_dataset(output_fp)
         ds_cropped = crop_spatial_bounds(ds, bounding_box)
+
+        print(f'LOADED VALIDTIME {valid_timestep_str} VAR {var} LEADTIME {leadtime} ckpt {ckpt_num} INIT_TIME {init_timestep_str} FORECAST:', output_fp)
+        print('ds.valid_time.values', ds.valid_time.values)
+
         if white_negative_values and not error:
             ds_cropped[var] = ds_cropped[var].where(ds_cropped[var] >= 0)
         ds_cropped_list[ckpt_num] = ds_cropped
@@ -525,7 +547,16 @@ def plot_Nckpts_1leadtime(leadtime = 5, ckpts=[1,30,70,90], experiment_number=1,
     mappable = ScalarMappable(norm=norm, cmap=cmap_to_use)
     mappable.set_array([])
     
-    cbar = fig.colorbar(mappable, ax=ax, location='right', shrink=0.8, pad=0.02)
+    if isinstance(ax, np.ndarray) and ax.ndim == 2 and ax.shape[0] > 2:
+        # location='bottom' puts it under plots. 
+        # aspect=40 makes it thinner (standard is 20). 
+        # pad=0.04 ensures separation from plots.
+        cbar = fig.colorbar(mappable, ax=ax, location='bottom',
+         shrink=0.6, pad=0.04, aspect=40
+        )
+    else:
+        cbar = fig.colorbar(mappable, ax=ax, location='right', shrink=0.8, pad=0.02)
+        
     if not contour_percentile is None and not error:
         cbar.ax.hlines(contour_val, 0, 1, colors='red', linewidths=2)
 
@@ -541,7 +572,7 @@ def plot_Nckpts_1leadtime(leadtime = 5, ckpts=[1,30,70,90], experiment_number=1,
         fp = f'figures/{var}_leadtime{leadtime}_ckpts{ckpts_str}_validtime{valid_timestep_str[:10]}_exp{experiment_number}.png'
     
     # --- TITLE AND SAVE POLYGON FIGURE ---
-    fig_poly.suptitle(f"{var} largest contours at lead time {leadtime} days", fontsize=16)
+    fig_poly.suptitle(f"{var} AR region at lead time {leadtime} days", fontsize=16)
     fp_poly = fp.replace('.png', '_polygons.png')
 
     if save_fig:
@@ -631,18 +662,20 @@ contour_percentile=80, figs_dir = '/projectnb/eb-general/wade/sfno/inference/fig
             # calculate contour value from truth distribution
             contour_val = np.percentile(truth.values, contour_percentile)
 
-            # get largest contours
-            cs_forecast = plt.contour(
+            # --- FIX START ---
+            # Changed plt.contour to plt.contourf with levels=[val, np.inf] and alpha=0
+            cs_forecast = plt.contourf(
                 forecast['lon'], forecast['lat'], forecast,
-                levels=[contour_val]
+                levels=[contour_val, np.inf], alpha=0
             )
             mx, my = get_largest_path_from_contour(cs_forecast)
 
-            cs_truth = plt.contour(
+            cs_truth = plt.contourf(
                 truth['lon'], truth['lat'], truth,
-                levels=[contour_val]
+                levels=[contour_val, np.inf], alpha=0
             )
             tx, ty = get_largest_path_from_contour(cs_truth)
+            # --- FIX END ---
 
             iou = get_IoU_of_contours(mx, my, tx, ty)
             ious[leadtime].append(iou)
@@ -706,18 +739,20 @@ absolute_figure=True):
             # calculate contour value from truth distribution
             contour_val = np.percentile(truth.values, contour_percentile)
 
-            # get largest contours
-            cs_forecast = plt.contour(
+            # --- FIX START ---
+            # Changed plt.contour to plt.contourf with levels=[val, np.inf] and alpha=0
+            cs_forecast = plt.contourf(
                 forecast['lon'], forecast['lat'], forecast,
-                levels=[contour_val]
+                levels=[contour_val, np.inf], alpha=0
             )
             mx, my = get_largest_path_from_contour(cs_forecast)
 
-            cs_truth = plt.contour(
+            cs_truth = plt.contourf(
                 truth['lon'], truth['lat'], truth,
-                levels=[contour_val]
+                levels=[contour_val, np.inf], alpha=0
             )
             tx, ty = get_largest_path_from_contour(cs_truth)
+            # --- FIX END ---
 
             # calculate amplitude difference
             amp_model = get_amplitude_of_contour(forecast, mx, my)
