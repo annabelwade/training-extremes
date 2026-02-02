@@ -1,0 +1,23 @@
+{
+    "experiment_setup": {
+        "event_type": "atmospheric_river",
+        "valid_timestep": "2022-12-27T00:00:00",
+        "leadtimes_days": [3, 5, 7],
+        "variables_to_save": ["tcwv", "u700", "v700", "z500"],
+        "ema": false,
+        "compute_ivt": true,
+        "bounding_box": {
+            "latitude_min": "25.0",
+            "latitude_max": "56.2",
+            "longitude_min": "220.0",
+            "longitude_max": "252.8"
+        }
+    },
+    "model_parameters": {
+        "fine_tuning_start_epoch": 71,
+        "epochs_to_run": "all"
+    },
+    "paths": {
+        "base_output_dir": "/projectnb/eb-general/wade/sfno/inference_runs/sandbox"
+    }
+}

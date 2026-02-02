@@ -20,16 +20,24 @@
 # Merge output and error files
 #$ -j y
 
-# Specify output file naming
-#$ -o /projectnb/eb-general/wade/sfno/inference/logs/inference_parallel_$TASK_ID.log
-
 #$ -P eb-general             # Specify the SCC project name you want to use
 #$ -m ea                    # Send email when job ends or aborts
 
+# Get the experiment number from the command line argument
+EXP_NUM=$1
+
+# Define the log directory and file name
+LOG_DIR="/projectnb/eb-general/wade/sfno/inference/logs/Experiment${EXP_NUM}"
+LOG_FILE="${LOG_DIR}/inference_parallel_${JOB_ID}_${SGE_TASK_ID}.log"
+
+# Create the directory if it doesn't exist
+mkdir -p $LOG_DIR
+
+exec > $LOG_FILE 2>&1
+
+# Environment Setup
 module load miniconda 
 conda activate earth2studio
 
 cd /projectnb/eb-general/wade/sfno/inference/
-
-# Run the python script
-python ./inference.py $1
+python ./inference.py $EXP_NUM
