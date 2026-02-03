@@ -6,6 +6,9 @@
 # Name the job
 #$ -N inference_parallel
 
+# Request the buyin queue
+#$ -l buyin
+
 # Request 1 GPU per task
 #$ -l gpus=1
 #$ -l gpu_c=7.0  
