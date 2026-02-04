@@ -28,12 +28,16 @@ def crop_spatial_bounds(ds, bounding_box):
     )
     return ds_cropped
 
-def calculate_weighted_mse(forecast, truth):
-    """Helper to calculate Latitude-Weighted MSE."""
-    squared_diff = (forecast - truth) ** 2
-    weights = np.cos(np.deg2rad(forecast.lat))
-    weights /= weights.mean() # normalize weights by their mean
-    return float((squared_diff*weights).mean())
+def calculate_mse(forecast, truth, latitude_weighting=True):
+    """Helper to calculate MSE or Latitude-Weighted MSE."""
+    if latitude_weighting:
+        squared_diff = (forecast - truth) ** 2
+        weights = np.cos(np.deg2rad(forecast.lat))
+        weights /= weights.mean() # normalize weights by their mean
+        return float((squared_diff*weights).mean())
+    else:
+        squared_diff = (forecast - truth) ** 2
+        return float(squared_diff.mean())
 
 def setup_figure_layout(num_plots):
     """Helper to handle the rows/columns math and figure initialization."""
@@ -83,6 +87,9 @@ def get_forecast_and_truth_data(experiment_number, ckpt_num, leadtime, var, boun
     ds = xr.open_dataset(output_fp)
     ds_cropped = crop_spatial_bounds(ds, bounding_box)
     forecast_data = ds_cropped[var].isel(valid_time=valid_time_ind)
+
+    # if var is IVT, use a different file path for truth
+    # TODO
 
     truth_fp = f"/projectnb/eb-general/wade/sfno/inference_runs/sandbox/init_files/Initialize_{inference_name}.nc"
     truth_ds = xr.open_dataset(truth_fp)
@@ -166,12 +173,16 @@ def get_IoU_of_contours(model_x, model_y, truth_x, truth_y, ):
     
     return iou
 
-def get_amplitude_of_contour(data_array, contour_x, contour_y):
+def get_amplitude_of_contour(data_array, contour_x, contour_y, latitude_weighting):
     """
     Helper to sum all the values of that variable within the contour.
     data_array: xarray DataArray with 'lat' and 'lon' dimensions
     contour_x: x-coordinates (lon) of the contour polygon's vertices
     contour_y: y-coordinates (lat) of the contour polygon's vertices
+    latitude_weighting: whether to apply latitude weighting before summing
+
+    In the case of 'tcwv', we are calling this metric "volume"
+    o/w this is "amplitude".
     """
 
     contour_poly = Polygon(zip(contour_x, contour_y))
@@ -180,19 +191,61 @@ def get_amplitude_of_contour(data_array, contour_x, contour_y):
         return 0.0
 
     total_amplitude = 0.0
-    for lat in data_array['lat'].values:
+    if latitude_weighting:
+        weights = np.cos(np.deg2rad(data_array['lat'].values))
+        weights /= weights.mean()  # normalize weights by their mean
+    for lat_i, lat in enumerate(data_array['lat'].values):
         for lon in data_array['lon'].values:
             point = Point(lon, lat)
             if contour_poly.contains(point):
-                value = data_array.sel(lat=lat, lon=lon).values
+                if latitude_weighting:
+                    weight = weights[lat_i]
+                    value = data_array.sel(lat=lat, lon=lon).values * weight
+                else:
+                    value = data_array.sel(lat=lat, lon=lon).values
                 total_amplitude += value
 
     return float(total_amplitude)
 
-def render_panel(ax, background_data, title, cmap, vmin, vmax, extent, ckpts=[], ckpt_num=None,
+def get_intensity_of_contour(data_array, contour_x, contour_y, latitude_weighting):
+    """
+    Helper to calculate the average intensity (mean value) of the variable within the contour.
+    First, utilizes the get_amplitude_of_contour function to get the total amplitude,
+    then divides by the number of grid points within the contour to get the mean intensity.
+
+    data_array: xarray DataArray with 'lat' and 'lon' dimensions
+    contour_x: x-coordinates (lon) of the contour polygon's vertices
+    contour_y: y-coordinates (lat) of the contour polygon's vertices
+    """
+    contour_poly = Polygon(zip(contour_x, contour_y))
+    if not contour_poly.is_valid:
+        print("Invalid polygon for intensity calculation.")
+        return 0.0
+
+    total_amplitude = get_amplitude_of_contour(data_array, contour_x, contour_y, latitude_weighting)
+
+    # Count number of grid points within the contour
+    point_count = 0
+    for lat in data_array['lat'].values:
+        for lon in data_array['lon'].values:
+            point = Point(lon, lat)
+            if contour_poly.contains(point):
+                point_count += 1
+
+    if point_count == 0:
+        print("No grid points found within the contour for intensity calculation.")
+        return 0.0
+
+    average_intensity = total_amplitude / point_count
+    return float(average_intensity)
+
+def render_panel(ax, background_data, title, cmap, vmin, vmax, extent, var, ckpts=[], ckpt_num=None,
                   contour_val=None, contour_data=None, truth_contour_data=None, is_truth=False,
                   mse_value=None, contour_metrics=True, poly_ax=None):
     """Helper to plot a single panel (contourf + optional contours + formatting)."""
+
+    # Define metrics to include in boxes   
+    metrics_to_incl = ['mse', 'iou', 'err_amplitude', 'err_volume', 'err_intensity'] # for controlling which metrics to visualize
     
     # 1. Main Background Plot
     ax.contourf(
@@ -242,9 +295,19 @@ def render_panel(ax, background_data, title, cmap, vmin, vmax, extent, ckpts=[],
         # A. Truth Panel Metrics (Amplitude only)
         if is_truth:
             if tx is not None:
-                amp_truth = get_amplitude_of_contour(background_data, tx, ty)
-                metrics_list.append({'key': 'amp', 'val': amp_truth, 'str': f"Amp: {amp_truth:.1f}"})
-                print(f"Truth total amplitude within contour: {amp_truth:.1f}")
+                # Amplitude
+                amp_truth = get_amplitude_of_contour(background_data, tx, ty, latitude_weighting=True)
+                if var == 'tcwv':
+                    metrics_list.append({'key': 'amp', 'val': amp_truth, 'str': f"vol: {amp_truth:.1f}"})
+                    print(f"Truth total volume within contour: {amp_truth:.1f}")
+                else:
+                    metrics_list.append({'key': 'amp', 'val': amp_truth, 'str': f"amp: {amp_truth:.1f}"})
+                    print(f"Truth total amplitude within contour: {amp_truth:.1f}")
+
+                # Intensity
+                intensity_truth = get_intensity_of_contour(background_data, tx, ty, latitude_weighting=True)
+                metrics_list.append({'key': 'intensity', 'val': intensity_truth, 'str': f"int: {intensity_truth:.2f}"})
+                print(f"Truth average intensity within contour: {intensity_truth:.2f}")
                 
                 # --- Plot Polygon on second figure for Truth ---
                 if poly_ax is not None:
@@ -258,25 +321,43 @@ def render_panel(ax, background_data, title, cmap, vmin, vmax, extent, ckpts=[],
         # B. Forecast Panel Metrics (IoU, MSE, Amp Diff)
         else:
             # MSE
-            if mse_value is not None:
+            if mse_value is not None and 'mse' in metrics_to_incl:
                 metrics_list.append({'key': 'mse', 'val': mse_value, 'str': f"MSE: {mse_value:.2f}"})
             
+            # IoU, Amplitude Difference, Intensity Difference
             if mx is not None and tx is not None:
-                # IoU
-                iou = get_IoU_of_contours(mx, my, tx, ty)
-                metrics_list.append({'key': 'iou', 'val': iou, 'str': f"IoU: {iou:.2f}"})
+                if 'iou' in metrics_to_incl:
+                    # IoU
+                    iou = get_IoU_of_contours(mx, my, tx, ty)
+                    metrics_list.append({'key': 'iou', 'val': iou, 'str': f"IoU: {iou:.2f}"})
                 
-                # Amplitude Difference (Model Amp - Truth Amp)
-                amp_model = get_amplitude_of_contour(c_data, mx, my)
-                print(f"ckpt_num: {ckpt_num}, Model pred total amplitude: {amp_model:.1f}")
-                
-                # # Amp raw (optional to display, usually good for reference)
-                # metrics_list.append({'key': 'amp_raw', 'val': amp_model, 'str': f"Amp: {amp_model:.1f}"})
+                if 'err_amplitude' in metrics_to_incl or 'err_volume' in metrics_to_incl:
+                    # Amplitude Difference (Model Amp - Truth Amp)
+                    amp_model = get_amplitude_of_contour(c_data, mx, my, latitude_weighting=True)
+                    if var == 'tcwv':
+                        print(f"ckpt_num: {ckpt_num}, Model pred total volume: {amp_model:.1f}")
+                    else:
+                        print(f"ckpt_num: {ckpt_num}, Model pred total amplitude: {amp_model:.1f}")
+                    
+                    # # Amp raw (optional to display, usually good for reference)
+                    # metrics_list.append({'key': 'amp_raw', 'val': amp_model, 'str': f"Amp: {amp_model:.1f}"})
 
-                amp_truth = get_amplitude_of_contour(truth_contour_data, tx, ty)
-                percent_error = ((amp_model - amp_truth) / amp_truth * 100) 
-                metrics_list.append({'key': 'err', 'val': percent_error, 'str': f"% err amp: {percent_error:.1f}"})
+                    amp_truth = get_amplitude_of_contour(truth_contour_data, tx, ty, latitude_weighting=True)
+                    percent_error = ((amp_model - amp_truth) / amp_truth * 100) 
+                    if var == 'tcwv':
+                        print(f"ckpt_num: {ckpt_num}, Truth total volume: {amp_truth:.1f}, % err volume: {percent_error:.1f}%")
+                        metrics_list.append({'key': 'err_volume', 'val': percent_error, 'str': f"% err vol: {percent_error:.1f}"})
+                    else:
+                        metrics_list.append({'key': 'err_amplitude', 'val': percent_error, 'str': f"% err amp: {percent_error:.1f}"})
                 
+                if 'err_intensity' in metrics_to_incl:
+                    # Intensity Difference (Model Intensity - Truth Intensity)
+                    intensity_model = get_intensity_of_contour(c_data, mx, my, latitude_weighting=True)
+                    intensity_truth = get_intensity_of_contour(truth_contour_data, tx, ty, latitude_weighting=True)
+                    percent_error_intensity = ((intensity_model - intensity_truth) / intensity_truth * 100)
+                    print(f"ckpt_num: {ckpt_num}, Model pred intensity: {intensity_model:.2f}, Truth intensity: {intensity_truth:.2f}, % err intensity: {percent_error_intensity:.1f}%")
+                    metrics_list.append({'key': 'err_intensity', 'val': percent_error_intensity, 'str': f"% err int: {percent_error_intensity:.1f}"})
+                    
                 # --- Plot Polygons on second figure for Forecast ---
                 if poly_ax is not None:
                     poly_ax.set_title(title, fontsize=10)
@@ -297,7 +378,6 @@ def render_panel(ax, background_data, title, cmap, vmin, vmax, extent, ckpts=[],
                         poly_ax.text(0.97, 0.03, f'IoU: {iou:.2f}', transform=poly_ax.transAxes, fontsize=12,
                                      bbox=dict(boxstyle='round', fc="w", ec="k", alpha=0.8),
                                     ha='right', va='bottom')
-
 
     # 5. Standard Formatting
     ax.set_title(title, fontsize=14)
@@ -337,10 +417,18 @@ def plot_Nckpts_1leadtime(leadtime = 5, ckpts=[1,30,70,90], experiment_number=1,
                     error=False, var ='tcwv', bounding_box={}, plot_truth=False,
                     cmap=cm.haline, error_cmap = mpl_cm.BrBG, cbar_min=None, cbar_max=None,
                     contour_percentile=None, contour_val=None, white_negative_values=False,
-                    plot_truth_contour=False, save_fig=True,
+                    plot_truth_contour=False, save_fig=True, figs_dir = '/projectnb/eb-general/wade/sfno/inference/figures',
+                    title=None,
                     ):
     
     ### SETUP ###
+    # If the subdirectory of the figs_dir is not exp{experiment_number}, add that
+    if not (f'exp{experiment_number}' in figs_dir):
+        figs_dir = f'{figs_dir}/exp{experiment_number}'
+        # create the directory if it doesn't exist
+        if not os.path.exists(figs_dir):
+            os.makedirs(figs_dir)
+    
     extent = [bounding_box['longitude_min'], bounding_box['longitude_max'], bounding_box['latitude_min'], bounding_box['latitude_max']]
     
     # Determine panels to plot
@@ -349,7 +437,7 @@ def plot_Nckpts_1leadtime(leadtime = 5, ckpts=[1,30,70,90], experiment_number=1,
         panels.append('Truth')
     panels.extend(ckpts)
     num_plots = len(panels)
-    
+
     fig, ax_list, ax = setup_figure_layout(num_plots)
     fig_poly, ax_list_poly, _ = setup_figure_layout(num_plots) #  second figure for Polygons ---
     
@@ -444,7 +532,7 @@ def plot_Nckpts_1leadtime(leadtime = 5, ckpts=[1,30,70,90], experiment_number=1,
         
         # --- HELPER CALL 2: Render Panel Content ---
         if item == 'Truth':
-            # Truth panel returns None or minimal metrics, usually we don't box truth metrics
+            # Truth panel returns None or few metrics
             _ = render_panel(
                 ax=ax_i,
                 background_data=truth_ds,
@@ -455,13 +543,14 @@ def plot_Nckpts_1leadtime(leadtime = 5, ckpts=[1,30,70,90], experiment_number=1,
                 truth_contour_data=truth_ds, is_truth=True,
                 mse_value=None, # No MSE for truth,
                 ckpts=ckpts,
-                poly_ax=poly_ax_i
+                poly_ax=poly_ax_i,
+                var=var,
             )
         else:
             ckpt_num = item
             # Calculate MSE on raw forecast vs truth regardless of plotting mode
             raw_forecast = ds_cropped_list[ckpt_num][var].isel(valid_time=valid_time_ind)
-            mse_val = calculate_weighted_mse(raw_forecast, truth_ds)
+            mse_val = calculate_mse(raw_forecast, truth_ds)
 
             if error:
                 # In error mode
@@ -476,7 +565,8 @@ def plot_Nckpts_1leadtime(leadtime = 5, ckpts=[1,30,70,90], experiment_number=1,
                     ckpt_num=ckpt_num,
                     mse_value=mse_val,
                     ckpts=ckpts,
-                    poly_ax=poly_ax_i
+                    poly_ax=poly_ax_i,
+                    var=var,
                 )
             else:
                 # In normal mode
@@ -491,7 +581,8 @@ def plot_Nckpts_1leadtime(leadtime = 5, ckpts=[1,30,70,90], experiment_number=1,
                     ckpt_num=ckpt_num,
                     mse_value=mse_val,
                     ckpts=ckpts,
-                    poly_ax=poly_ax_i
+                    poly_ax=poly_ax_i,
+                    var=var,
                 )
             
             # Add these to our global list
@@ -501,33 +592,42 @@ def plot_Nckpts_1leadtime(leadtime = 5, ckpts=[1,30,70,90], experiment_number=1,
 
     # --- POST-PROCESSING: Find best metrics and Color Boxes ---
     if all_metrics_tracker:
+        print('Identifying best metrics across all ckpt panels...')
         # Flatten the structure to easily find min/max
         # Collect all values
         mse_vals = [m['mse']['val'] for m in all_metrics_tracker if 'mse' in m]
         iou_vals = [m['iou']['val'] for m in all_metrics_tracker if 'iou' in m]
-        err_vals = [abs(m['err']['val']) for m in all_metrics_tracker if 'err' in m]
+        if var == 'tcwv':
+            err_amp_vals = [m['err_volume']['val'] for m in all_metrics_tracker if 'err_volume' in m]
+        else:
+            err_amp_vals = [m['err_amplitude']['val'] for m in all_metrics_tracker if 'err_amplitude' in m]
+        err_intensity_vals = [m['err_intensity']['val'] for m in all_metrics_tracker if 'err_intensity' in m]
 
         best_mse = min(mse_vals) if mse_vals else None
         best_iou = max(iou_vals) if iou_vals else None
-        best_err_abs = min(err_vals) if err_vals else None
+        best_err_amp = min(err_amp_vals, key=abs) if err_amp_vals else None
+        best_err_intensity = min(err_intensity_vals, key=abs) if err_intensity_vals else None
 
         # Iterate through all panels and highlight the specific text boxes
         for panel in all_metrics_tracker:
-            
-            # Check MSE
-            if 'mse' in panel and best_mse is not None:
+            # MSE
+            if best_mse is not None and 'mse' in panel:
                 if panel['mse']['val'] == best_mse:
                     panel['mse']['text_obj'].set_bbox(dict(boxstyle='round', fc="w", ec="lime", alpha=0.9, lw=2.5))
-            
-            # Check IoU
-            if 'iou' in panel and best_iou is not None:
+            # IoU
+            if best_iou is not None and 'iou' in panel:
                 if panel['iou']['val'] == best_iou:
                     panel['iou']['text_obj'].set_bbox(dict(boxstyle='round', fc="w", ec="lime", alpha=0.9, lw=2.5))
-
-            # Check % Err (using abs comparison)
-            if 'err' in panel and best_err_abs is not None:
-                if abs(panel['err']['val']) == best_err_abs:
-                    panel['err']['text_obj'].set_bbox(dict(boxstyle='round', fc="w", ec="lime", alpha=0.9, lw=2.5))
+            # Amplitude Error
+            if best_err_amp is not None:
+                err_amp_key = 'err_volume' if var == 'tcwv' else 'err_amplitude'
+                if err_amp_key in panel:
+                    if abs(panel[err_amp_key]['val']) == abs(best_err_amp):
+                        panel[err_amp_key]['text_obj'].set_bbox(dict(boxstyle='round', fc="w", ec="lime", alpha=0.9, lw=2.5))
+            # Intensity Error
+            if best_err_intensity is not None and 'err_intensity' in panel:
+                if abs(panel['err_intensity']['val']) == abs(best_err_intensity):
+                    panel['err_intensity']['text_obj'].set_bbox(dict(boxstyle='round', fc="w", ec="lime", alpha=0.9, lw=2.5))
 
 
     # Turn off unused axes
@@ -564,12 +664,18 @@ def plot_Nckpts_1leadtime(leadtime = 5, ckpts=[1,30,70,90], experiment_number=1,
     ckpts_str = '_'.join(map(str, ckpts))
     if error:
         cbar.set_label(f"{var} prediction - truth")
-        fig.suptitle(f"{var} prediction - truth at lead time {leadtime} days (exp {experiment_number})", fontsize=16)
-        fp = f'figures/{var}_leadtime{leadtime}_error_ckpts{ckpts_str}_validtime{valid_timestep_str[:10]}_exp{experiment_number}.png'
+        if not title is None:
+            fig.suptitle(title, fontsize=16)
+        else:
+            fig.suptitle(f"{var} prediction - truth at lead time {leadtime} days (exp {experiment_number})", fontsize=16)
+        fp = f'{figs_dir}/{var}_leadtime{leadtime}_error_ckpts{ckpts_str}_validtime{valid_timestep_str[:10]}.png'
     else:
         cbar.set_label(f"{var}")
-        fig.suptitle(f"{var} at lead time {leadtime} days (exp {experiment_number})", fontsize=16)
-        fp = f'figures/{var}_leadtime{leadtime}_ckpts{ckpts_str}_validtime{valid_timestep_str[:10]}_exp{experiment_number}.png'
+        if not title is None:
+            fig.suptitle(title, fontsize=16)
+        else:
+            fig.suptitle(f"{var} at lead time {leadtime} days (exp {experiment_number})", fontsize=16)
+        fp = f'{figs_dir}/{var}_leadtime{leadtime}_ckpts{ckpts_str}_validtime{valid_timestep_str[:10]}.png'
     
     # --- TITLE AND SAVE POLYGON FIGURE ---
     fig_poly.suptitle(f"{var} AR region at lead time {leadtime} days", fontsize=16)
@@ -587,7 +693,8 @@ def plot_Nckpts_1leadtime(leadtime = 5, ckpts=[1,30,70,90], experiment_number=1,
     plt.show()
     return cbar_min, cbar_max, contour_val
 
-def calculate_mse_for_ckpts_and_leadtimes(ckpts, leadtimes, var, experiment_number, valid_timestep_str, bounding_box):
+def calculate_mse_for_ckpts_and_leadtimes(ckpts, leadtimes, var, experiment_number, valid_timestep_str, bounding_box,
+                latitude_weighting=True):
     mses = {
         leadtime: [] for leadtime in leadtimes
     }
@@ -598,12 +705,28 @@ def calculate_mse_for_ckpts_and_leadtimes(ckpts, leadtimes, var, experiment_numb
             forecast, truth = get_forecast_and_truth_data(experiment_number=experiment_number, ckpt_num=ckpt, leadtime=leadtime, 
                 valid_timestep_str=valid_timestep_str,  
                 var=var, bounding_box=bounding_box)
-            mse = calculate_weighted_mse(forecast, truth)
+            mse = calculate_mse(forecast, truth, latitude_weighting=latitude_weighting,)
             mses[leadtime].append(mse)
     
     return mses
 
-def mse_ckpt_leadtimes(ckpts, mses, var, experiment_number, highlight_min = True, figs_dir = '/projectnb/eb-general/wade/sfno/inference/figures'):
+def plot_mse_ckpt_leadtimes(ckpts, mses, var, experiment_number, highlight_min = True, 
+                figs_dir = '/projectnb/eb-general/wade/sfno/inference/figures', 
+                normalize=True, latitude_weighting=True, valid_timestep_str='2022-12-27'):
+
+    # If the subdirectory of the figs_dir is not exp{experiment_number}, add that
+    if not (f'exp{experiment_number}' in figs_dir):
+        figs_dir = f'{figs_dir}/exp{experiment_number}'
+        # create the directory if it doesn't exist
+        if not os.path.exists(figs_dir):
+            os.makedirs(figs_dir)
+
+    # Normalize by the value of the mse_w at the last checkpoint
+    if normalize:
+        for leadtime in mses:
+            last_mse = mses[leadtime][-1]
+            mses[leadtime] = [mse / last_mse for mse in mses[leadtime]]
+
     # Make a plot of MSE vs ckpt for different lead times
     fig,ax = plt.subplots(figsize=(6,4))
 
@@ -615,7 +738,8 @@ def mse_ckpt_leadtimes(ckpts, mses, var, experiment_number, highlight_min = True
     }
     for leadtime in [3,5,7]:
         mses_select = mses[leadtime]
-        ax.plot(ckpts, mses_select, label=f'leadtime={leadtime} days', color=colors[leadtime], alpha=0.9, linewidth=2, marker='o', markersize=2)
+        ax.plot(ckpts, mses_select, label=f'leadtime={leadtime} days', color=colors[leadtime], 
+        alpha=0.825, linewidth=2, marker='o', markersize=2)
 
     if highlight_min:
         # find the minimum mse for each leadtime and highlight it with a star
@@ -625,29 +749,64 @@ def mse_ckpt_leadtimes(ckpts, mses, var, experiment_number, highlight_min = True
             # if there are points within 0.5 stdev from the minimum, highlight them too
             stdev = np.std(mses_select)
             for i, mse in enumerate(mses_select):
-                threshold = mses_select[min_idx] + 0.05 * stdev
+                threshold = mses_select[min_idx] + 0.1 * stdev
                 if mse <= threshold:
-                    ax.plot(ckpts[i], mse, marker='*', color=colors[leadtime], markersize=8, alpha=0.75)
+                    ax.plot(ckpts[i], mse, marker='*', color=colors[leadtime], markersize=8, alpha=0.8)
                     # ax.text(ckpts[i]-0.03, mse,'🌟',fontsize=10) 
-            ax.plot(ckpts[min_idx], mses_select[min_idx], marker='*', color=colors[leadtime], markersize=8,)
+            ax.plot(ckpts[min_idx], mses_select[min_idx], marker='*', color=colors[leadtime], markersize=8, alpha=0.8)
             # ax.text(ckpts[min_idx]-0.03, mses_select[min_idx],'★',fontsize=12)
 
     ax.set_xlabel('Checkpoint')
     # make the xlabel have finer ticks for ckpts
     ax.set_xticks(ckpts)
-    xticklabels = [str(ckpt) if i % 3 == 0 else ''  for i, ckpt in enumerate(ckpts) ]
+    xticklabels = [str(ckpt) if i % 5 == 0 else ''  for i, ckpt in enumerate(ckpts) ]
     ax.set_xticklabels(xticklabels, )
-    ax.set_ylabel(r"$\text{mse}_w$")
-    ax.set_title(f'latitude-weighted MSE of {var} for experiment {experiment_number} event')
+    if latitude_weighting:
+        # ax.set_title(f'latitude-weighted MSE of {var} for experiment {experiment_number} event')
+        # include the event date in the title
+        ax.set_title(f'Latitude-weighted MSE of {var} event on {valid_timestep_str[:10]} (exp {experiment_number})')
+
+    else:
+        ax.set_title(f'MSE of {var} for experiment {experiment_number} event')
     ax.legend()
-    plt.yscale('log')
+    # plt.yscale('log')
+    if normalize:
+        # draw a horizontal line at y=1
+        ax.axhline(y=1, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+        if latitude_weighting:
+            # set the ylabel to show that it's normalized latitude-weighted mse by symbolizing mse_w / mse_w_final 
+            ax.set_ylabel(r"$\frac{\text{mse}_w}{\text{mse}_{w,\text{final}}}$",
+            # rotate so that the fraction line is horizontal
+            rotation=0, labelpad=20
+            )
+        else:
+            ax.set_ylabel(r"$\frac{\text{mse}}{\text{mse}_{\text{final}}}$",
+            # rotate so that the fraction line is horizontal
+            rotation=0, labelpad=20
+            )
+
+    else:
+        if latitude_weighting:
+            ax.set_ylabel(r"$\text{mse}_w$")
+        else:
+            ax.set_ylabel(r"$\text{mse}$")
     plt.tight_layout()
-    output_dir = figs_dir + f'/exp{experiment_number}/'
-    plt.savefig(f'{output_dir}/{var}_mse_vs_ckpt_leadtimes.png', dpi=300)
+    if latitude_weighting:
+        plt.savefig(f'{figs_dir}/{var}_latitude_weighted_mse_vs_ckpt_leadtimes.png', dpi=300)
+    else:
+        plt.savefig(f'{figs_dir}/{var}_mse_vs_ckpt_leadtimes.png', dpi=300)
     plt.show()
 
-def iou_ckpt_leadtimes(ckpts, leadtimes, var, experiment_number, valid_timestep_str, bounding_box, 
-contour_percentile=80, figs_dir = '/projectnb/eb-general/wade/sfno/inference/figures', highlight_max=True):
+def plot_iou_ckpt_leadtimes(ckpts, leadtimes, var, experiment_number, valid_timestep_str, bounding_box, 
+        contour_percentile=80, figs_dir = '/projectnb/eb-general/wade/sfno/inference/figures', highlight_max=True):
+
+    # If the subdirectory of the figs_dir is not exp{experiment_number}, add that
+    if not (f'exp{experiment_number}' in figs_dir):
+        figs_dir = f'{figs_dir}/exp{experiment_number}'
+        # create the directory if it doesn't exist
+        if not os.path.exists(figs_dir):
+            os.makedirs(figs_dir)
+        
     ious = {
         leadtime: [] for leadtime in leadtimes
     }
@@ -718,13 +877,20 @@ contour_percentile=80, figs_dir = '/projectnb/eb-general/wade/sfno/inference/fig
     ax.legend()
     plt.ylim(0,1)
     plt.tight_layout()
-    output_dir = figs_dir + f'/exp{experiment_number}/'
-    plt.savefig(f'{output_dir}/{var}_iou_vs_ckpt_leadtimes.png', dpi=300)
+    plt.savefig(f'{figs_dir}/{var}_iou_vs_ckpt_leadtimes.png', dpi=300)
     plt.show()
 
-def err_amp_ckpts_leadtimes(ckpts, leadtimes, var, experiment_number, valid_timestep_str, bounding_box, 
-contour_percentile=80, figs_dir = '/projectnb/eb-general/wade/sfno/inference/figures', highlight_min=True,
-absolute_figure=True):
+def plot_err_amp_ckpts_leadtimes(ckpts, leadtimes, var, experiment_number, valid_timestep_str, bounding_box, 
+        contour_percentile=80, figs_dir = '/projectnb/eb-general/wade/sfno/inference/figures', highlight_min=True,
+        absolute_figure=True):
+
+    # If the subdirectory of the figs_dir is not exp{experiment_number}, add that
+    if not (f'exp{experiment_number}' in figs_dir):
+        figs_dir = f'{figs_dir}/exp{experiment_number}'
+        # create the directory if it doesn't exist
+        if not os.path.exists(figs_dir):
+            os.makedirs(figs_dir)
+    
     err_amps = {
         leadtime: [] for leadtime in leadtimes
     }
@@ -755,8 +921,8 @@ absolute_figure=True):
             # --- FIX END ---
 
             # calculate amplitude difference
-            amp_model = get_amplitude_of_contour(forecast, mx, my)
-            amp_truth = get_amplitude_of_contour(truth, tx, ty)
+            amp_model = get_amplitude_of_contour(forecast, mx, my, latitude_weighting=True)
+            amp_truth = get_amplitude_of_contour(truth, tx, ty, latitude_weighting=True)
             percent_error = ((amp_model - amp_truth) / amp_truth * 100) 
             err_amps[leadtime].append(percent_error)
 
@@ -826,11 +992,9 @@ absolute_figure=True):
     ax.legend()
     # plt.ylim(-100,100)
     plt.tight_layout()
-    output_dir = figs_dir + f'/exp{experiment_number}/'
-    
     # Save original
     plt.figure(fig.number)
-    plt.savefig(f'{output_dir}/{var}_err_amp_vs_ckpt_leadtimes.png', dpi=300)
+    plt.savefig(f'{figs_dir}/{var}_err_amp_vs_ckpt_leadtimes.png', dpi=300)
     
     # --- Formatting Absolute Plot ---
     if absolute_figure:
@@ -842,215 +1006,120 @@ absolute_figure=True):
         ax_abs.legend()
         plt.figure(fig_abs.number) # set active figure to abs
         plt.tight_layout()
-        plt.savefig(f'{output_dir}/{var}_abs_err_amp_vs_ckpt_leadtimes.png', dpi=300)
+        plt.savefig(f'{figs_dir}/{var}_abs_err_amp_vs_ckpt_leadtimes.png', dpi=300)
     
     plt.show()
 
-# def err_amp_ckpts_leadtimes(ckpts, leadtimes, var, experiment_number, valid_timestep_str, bounding_box, 
-# contour_percentile=80, figs_dir = '/projectnb/eb-general/wade/sfno/inference/figures', highlight_min=True,
-# absolute_figure=True):
-#     err_amps = {
-#         leadtime: [] for leadtime in leadtimes
-#     }
+def plot_err_intensity_ckpts_leadtimes(ckpts, leadtimes, var, experiment_number, valid_timestep_str, bounding_box, 
+        contour_percentile=80, figs_dir = '/projectnb/eb-general/wade/sfno/inference/figures', highlight_min=True,
+        absolute_figure=True):
 
-#     for leadtime in leadtimes:
-#         for ckpt in ckpts:
-#             # get forecast and truth for this ckpt
-#             forecast, truth = get_forecast_and_truth_data(experiment_number=experiment_number, ckpt_num=ckpt, leadtime=leadtime, 
-#                 valid_timestep_str=valid_timestep_str,  
-#                 var=var, bounding_box=bounding_box)
-            
-#             # calculate contour value from truth distribution
-#             contour_val = np.percentile(truth.values, contour_percentile)
-
-#             # get largest contours
-#             cs_forecast = plt.contour(
-#                 forecast['lon'], forecast['lat'], forecast,
-#                 levels=[contour_val]
-#             )
-#             mx, my = get_largest_path_from_contour(cs_forecast)
-
-#             cs_truth = plt.contour(
-#                 truth['lon'], truth['lat'], truth,
-#                 levels=[contour_val]
-#             )
-#             tx, ty = get_largest_path_from_contour(cs_truth)
-
-#             # calculate amplitude difference
-#             amp_model = get_amplitude_of_contour(forecast, mx, my)
-#             amp_truth = get_amplitude_of_contour(truth, tx, ty)
-#             percent_error = ((amp_model - amp_truth) / amp_truth * 100) 
-#             err_amps[leadtime].append(percent_error)
-
-#             # clear figure to avoid overlapping contours
-#             plt.clf()
+    # If the subdirectory of the figs_dir is not exp{experiment_number}, add that
+    if not (f'exp{experiment_number}' in figs_dir):
+        figs_dir = f'{figs_dir}/exp{experiment_number}'
+        # create the directory if it doesn't exist
+        if not os.path.exists(figs_dir):
+            os.makedirs(figs_dir)
     
-#     # Make a plot of % Amp Error vs ckpt for different lead times
-#     fig,ax = plt.subplots(figsize=(6,4))
+    err_intensities = {
+        leadtime: [] for leadtime in leadtimes
+    }
 
-#     cmap = cm.matter
-#     colors = {
-#         3: cmap(0.2),
-#         5: cmap(0.5),
-#         7: cmap(0.8)
-#     }
-#     for leadtime in [3,5,7]:
-#         err_amps_select = err_amps[leadtime]
-#         ax.plot(ckpts, err_amps_select, label=f'leadtime={leadtime} days', color=colors[leadtime], alpha=0.9, linewidth=2, marker='o', markersize=2)
-
-#     if highlight_min:
-#         # find the minimum absolute error for each leadtime and highlight it with a star
-#         for leadtime in [3,5,7]:
-#             err_amps_select = np.array(err_amps[leadtime])
-#             # Use absolute error to find the 'best' performance (closest to 0)
-#             abs_errs = np.abs(err_amps_select)
-#             min_idx = np.argmin(abs_errs)
+    for leadtime in leadtimes:
+        for ckpt in ckpts:
+            # get forecast and truth for this ckpt
+            forecast, truth = get_forecast_and_truth_data(experiment_number=experiment_number, ckpt_num=ckpt, leadtime=leadtime, 
+                valid_timestep_str=valid_timestep_str,  
+                var=var, bounding_box=bounding_box)
             
-#             # if there are points within 0.05 stdev from the minimum (absolute), highlight them too
-#             stdev = np.std(abs_errs)
-#             for i, val in enumerate(err_amps_select):
-#                 threshold = abs_errs[min_idx] + 0.05 * stdev
-#                 if abs(val) <= threshold:
-#                     ax.plot(ckpts[i], val, marker='*', color=colors[leadtime], markersize=8, alpha=0.75)
-#             ax.plot(ckpts[min_idx], err_amps_select[min_idx], marker='*', color=colors[leadtime], markersize=8)
+            # calculate contour value from truth distribution
+            contour_val = np.percentile(truth.values, contour_percentile)
 
-#     ax.set_xlabel('Checkpoint')
-#     # make the xlabel have finer ticks for ckpts
-#     ax.set_xticks(ckpts)
-#     xticklabels = [str(ckpt) if i % 3 == 0 else ''  for i, ckpt in enumerate(ckpts) ]
-#     ax.set_xticklabels(xticklabels, )
-#     ax.set_ylabel("% Amplitude Error")
-#     ax.set_title(f'% Amplitude Error of {var} contours for experiment {experiment_number} event')
-#     ax.legend()
-#     # plt.ylim(-100,100)
-#     plt.tight_layout()
-#     output_dir = figs_dir + f'/exp{experiment_number}/'
-#     plt.savefig(f'{output_dir}/{var}_err_amp_vs_ckpt_leadtimes.png', dpi=300)
-#     plt.show()
+            # --- FIX START ---
+            # Changed plt.contour to plt.contourf with levels=[val, np.inf] and alpha=0
+            cs_forecast = plt.contourf(
+                forecast['lon'], forecast['lat'], forecast,
+                levels=[contour_val, np.inf], alpha=0
+            )
+            mx, my = get_largest_path_from_contour(cs_forecast)
 
-# def iou_ckpt_leadtimes(ckpts, leadtimes, var, experiment_number, valid_timestep_str, bounding_box, 
-# contour_percentile=80, figs_dir = '/projectnb/eb-general/wade/sfno/inference/figures', highlight_max=True):
-#     ious = {
-#         leadtime: [] for leadtime in leadtimes
-#     }
+            cs_truth = plt.contourf(
+                truth['lon'], truth['lat'], truth,
+                levels=[contour_val, np.inf], alpha=0
+            )
+            tx, ty = get_largest_path_from_contour(cs_truth)
+            # --- FIX END ---
 
-#     for leadtime in leadtimes:
-#         for ckpt in ckpts:
-#             # get forecast and truth for this ckpt
-#             forecast, truth = get_forecast_and_truth_data(experiment_number=experiment_number, ckpt_num=ckpt, leadtime=leadtime, 
-#                 valid_timestep_str=valid_timestep_str,  
-#                 var=var, bounding_box=bounding_box)
-            
-#             # calculate contour value from truth distribution
-#             contour_val = np.percentile(truth.values, contour_percentile)
+            # calculate intensity difference
+            intensity_model = get_intensity_of_contour(forecast, mx, my)
+            intensity_truth = get_intensity_of_contour(truth, tx, ty)
+            percent_error_intensity = ((intensity_model - intensity_truth) / intensity_truth * 100) 
+            err_intensities[leadtime].append(percent_error_intensity)
 
-#             # get largest contours
-#             cs_forecast = plt.contour(
-#                 forecast['lon'], forecast['lat'], forecast,
-#                 levels=[contour_val]
-#             )
-#             mx, my = get_largest_path_from_contour(cs_forecast)
-
-#             cs_truth = plt.contour(
-#                 truth['lon'], truth['lat'], truth,
-#                 levels=[contour_val]
-#             )
-#             tx, ty = get_largest_path_from_contour(cs_truth)
-
-#             iou = get_IoU_of_contours(mx, my, tx, ty)
-#             ious[leadtime].append(iou)
-
-#             plt.clf()
+            # clear figure to avoid overlapping contours
+            plt.clf()
     
-#     # Make a plot of IoU vs ckpt for different lead times
-#     fig,ax = plt.subplots(figsize=(6,4))
-
-#     cmap = cm.matter
-#     colors = {
-#         3: cmap(0.2),
-#         5: cmap(0.5),
-#         7: cmap(0.8)
-#     }
-#     for leadtime in [3,5,7]:
-#         ious_select = ious[leadtime]
-#         ax.plot(ckpts, ious_select, label=f'leadtime={leadtime} days', color=colors[leadtime], alpha=0.9, linewidth=2, marker='o', markersize=2)
-
-#     ax.set_xlabel('Checkpoint')
-#     # make the xlabel have finer ticks for ckpts
-#     ax.set_xticks(ckpts)
-#     xticklabels = [str(ckpt) if i % 3 == 0 else ''  for i, ckpt in enumerate(ckpts) ]
-#     ax.set_xticklabels(xticklabels, )
-#     ax.set_ylabel("IoU")
-#     ax.set_title(f'IoU of {var} contours for experiment {experiment_number} event')
-#     ax.legend()
-#     plt.ylim(0,1)
-#     plt.tight_layout()
-#     output_dir = figs_dir + f'/exp{experiment_number}/'
-#     plt.savefig(f'{output_dir}/{var}_iou_vs_ckpt_leadtimes.png', dpi=300)
-#     plt.show()
-
-# def err_amp_ckpts_leadtimes(ckpts, leadtimes, var, experiment_number, valid_timestep_str, bounding_box, 
-# contour_percentile=80, figs_dir = '/projectnb/eb-general/wade/sfno/inference/figures', highlight_min=True):
-#     err_amps = {
-#         leadtime: [] for leadtime in leadtimes
-#     }
-
-#     for leadtime in leadtimes:
-#         for ckpt in ckpts:
-#             # get forecast and truth for this ckpt
-#             forecast, truth = get_forecast_and_truth_data(experiment_number=experiment_number, ckpt_num=ckpt, leadtime=leadtime, 
-#                 valid_timestep_str=valid_timestep_str,  
-#                 var=var, bounding_box=bounding_box)
-            
-#             # calculate contour value from truth distribution
-#             contour_val = np.percentile(truth.values, contour_percentile)
-
-#             # get largest contours
-#             cs_forecast = plt.contour(
-#                 forecast['lon'], forecast['lat'], forecast,
-#                 levels=[contour_val]
-#             )
-#             mx, my = get_largest_path_from_contour(cs_forecast)
-
-#             cs_truth = plt.contour(
-#                 truth['lon'], truth['lat'], truth,
-#                 levels=[contour_val]
-#             )
-#             tx, ty = get_largest_path_from_contour(cs_truth)
-
-#             # calculate amplitude difference
-#             amp_model = get_amplitude_of_contour(forecast, mx, my)
-#             amp_truth = get_amplitude_of_contour(truth, tx, ty)
-#             percent_error = ((amp_model - amp_truth) / amp_truth * 100) 
-#             err_amps[leadtime].append(percent_error)
-
-#             # clear figure to avoid overlapping contours
-#             plt.clf()
+    # Make a plot of % Intensity Error vs ckpt for different lead times
+    fig, ax = plt.subplots(figsize=(6,4))
+    # Setup second figure for Absolute Error if requested
+    if absolute_figure:
+        fig_abs, ax_abs = plt.subplots(figsize=(6,4))
+    else:
+        fig_abs, ax_abs = None, None
     
-#     # Make a plot of % Amp Error vs ckpt for different lead times
-#     fig,ax = plt.subplots(figsize=(6,4))
-
-#     cmap = cm.matter
-#     colors = {
-#         3: cmap(0.2),
-#         5: cmap(0.5),
-#         7: cmap(0.8)
-#     }
-#     for leadtime in [3,5,7]:
-#         err_amps_select = err_amps[leadtime]
-#         ax.plot(ckpts, err_amps_select, label=f'leadtime={leadtime} days', color=colors[leadtime], alpha=0.9, linewidth=2, marker='o', markersize=2)
-
-#     ax.set_xlabel('Checkpoint')
-#     # make the xlabel have finer ticks for ckpts
-#     ax.set_xticks(ckpts)
-#     xticklabels = [str(ckpt) if i % 3 == 0 else ''  for i, ckpt in enumerate(ckpts) ]
-#     ax.set_xticklabels(xticklabels, )
-#     ax.set_ylabel("% Amplitude Error")
-#     ax.set_title(f'% Amplitude Error of {var} contours for experiment {experiment_number} event')
-#     ax.legend()
-#     plt.ylim(-100,100)
-#     plt.tight_layout()
-#     output_dir = figs_dir + f'/exp{experiment_number}/'
-#     plt.savefig(f'{output_dir}/{var}_err_amp_vs_ckpt_leadtimes.png', dpi=300)
-#     plt.show()
-
+    cmap = cm.matter
+    colors = {
+        3: cmap(0.2),
+        5: cmap(0.5),
+        7: cmap(0.8)
+    }
+    for leadtime in [3,5,7]:
+        err_intensities_select = err_intensities[leadtime]
+        
+        # Plot on original axis
+        ax.plot(ckpts, err_intensities_select, label=f'leadtime={leadtime} days', color=colors[leadtime], alpha=0.9, linewidth=2, marker='o', markersize=2)
+        
+        # Plot on absolute axis
+        if absolute_figure:
+            abs_errs = np.abs(err_intensities_select)
+            ax_abs.plot(ckpts, abs_errs, label=f'leadtime={leadtime} days', color=colors[leadtime], alpha=0.9, linewidth=2, marker='o', markersize=2)
+    if highlight_min:
+        # find the minimum absolute error for each leadtime and highlight it with a star
+        for leadtime in [3,5,7]:
+            err_intensities_select = np.array(err_intensities[leadtime])
+            # Use absolute error to find the 'best' performance (closest to 0)
+            abs_errs = np.abs(err_intensities_select)
+            min_idx = np.argmin(abs_errs)
+            
+            # if there are points within 0.05 stdev from the minimum (absolute), highlight them too
+            stdev = np.std(abs_errs)
+            for i, val in enumerate(err_intensities_select):
+                threshold = abs_errs[min_idx] + 0.05 * stdev
+                if abs(val) <= threshold:
+                    # Highlight on original axis
+                    ax.plot(ckpts[i], val, marker='*', color=colors[leadtime], markersize=8, alpha=0.75)
+                    # Highlight on absolute axis
+                    if absolute_figure:
+                        ax_abs.plot(ckpts[i], abs(val), marker='*', color=colors[leadtime], markersize=8, alpha=0.75)
+            
+            # Highlight min on original axis
+            ax.plot(ckpts[min_idx], err_intensities_select[min_idx], marker='*', color=colors[leadtime], markersize=8)
+            # Highlight min on absolute axis
+            if absolute_figure:
+                ax_abs.plot(ckpts[min_idx], abs(err_intensities_select[min_idx]), marker='*', color=colors[leadtime], markersize=8)
+    # --- Formatting Original Plot ---
+    ax.axhline(0, linestyle='--', color='gray', alpha=0.7, linewidth=1.5) # Add horizontal line at 0
+    ax.set_xlabel('Checkpoint')
+    # make the xlabel have finer ticks for ckpts
+    ax.set_xticks(ckpts)
+    xticklabels = [str(ckpt) if i % 3 == 0 else ''  for i, ckpt in enumerate(ckpts) ]
+    ax.set_xticklabels(xticklabels, )
+    ax.set_ylabel("% Intensity Error")
+    ax.set_title(f'% Intensity Error of {var} contours for experiment {experiment_number} event')
+    ax.legend()
+    # plt.ylim(-100,100)
+    plt.tight_layout()
+    # Save original
+    plt.figure(fig.number)
+    plt.savefig(f'{figs_dir}/{var}_err_intensity_vs_ckpt_leadtimes.png', dpi=300)
+    plt.show()
