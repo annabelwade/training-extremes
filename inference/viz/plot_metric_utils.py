@@ -175,16 +175,85 @@ def get_IoU_of_contours(model_x, model_y, truth_x, truth_y, ):
     
     return iou
 
+# def get_amplitude_of_contour(data_array, contour_x, contour_y, latitude_weighting):
+#     """
+#     Helper to sum all the values of that variable within the contour.
+#     data_array: xarray DataArray with 'lat' and 'lon' dimensions
+#     contour_x: x-coordinates (lon) of the contour polygon's vertices
+#     contour_y: y-coordinates (lat) of the contour polygon's vertices
+#     latitude_weighting: whether to apply latitude weighting before summing
+
+#     In the case of 'tcwv', we are calling this metric "volume"
+#     o/w this is "amplitude".
+#     """
+
+#     contour_poly = Polygon(zip(contour_x, contour_y))
+#     if not contour_poly.is_valid:
+#         print("Invalid polygon for amplitude calculation.")
+#         return 0.0
+
+#     total_amplitude = 0.0
+#     if latitude_weighting:
+#         weights = np.cos(np.deg2rad(data_array['lat'].values))
+#         weights /= weights.mean()  # normalize weights by their mean
+#     for lat_i, lat in enumerate(data_array['lat'].values):
+#         for lon in data_array['lon'].values:
+#             point = Point(lon, lat)
+#             if contour_poly.contains(point):
+#                 if latitude_weighting:
+#                     weight = weights[lat_i]
+#                     value = data_array.sel(lat=lat, lon=lon).values * weight
+#                 else:
+#                     value = data_array.sel(lat=lat, lon=lon).values
+#                 total_amplitude += value
+
+#     return float(total_amplitude)
+
+# def get_intensity_of_contour(data_array, contour_x, contour_y, latitude_weighting):
+#     """
+#     Helper to calculate the average intensity (mean value) of the variable within the contour.
+#     First, utilizes the get_amplitude_of_contour function to get the total amplitude,
+#     then divides by the number of grid points within the contour to get the mean intensity.
+
+#     data_array: xarray DataArray with 'lat' and 'lon' dimensions
+#     contour_x: x-coordinates (lon) of the contour polygon's vertices
+#     contour_y: y-coordinates (lat) of the contour polygon's vertices
+#     """
+#     contour_poly = Polygon(zip(contour_x, contour_y))
+#     if not contour_poly.is_valid:
+#         print("Invalid polygon for intensity calculation.")
+#         return 0.0
+
+#     total_amplitude = get_amplitude_of_contour(data_array, contour_x, contour_y, latitude_weighting)
+
+#     # Count number of grid points within the contour
+#     point_count = 0
+#     for lat in data_array['lat'].values:
+#         for lon in data_array['lon'].values:
+#             point = Point(lon, lat)
+#             if contour_poly.contains(point):
+#                 point_count += 1
+
+#     if point_count == 0:
+#         print("No grid points found within the contour for intensity calculation.")
+#         return 0.0
+
+#     average_intensity = total_amplitude / point_count
+#     return float(average_intensity)
+
 def get_amplitude_of_contour(data_array, contour_x, contour_y, latitude_weighting):
     """
     Helper to sum all the values of that variable within the contour.
     data_array: xarray DataArray with 'lat' and 'lon' dimensions
     contour_x: x-coordinates (lon) of the contour polygon's vertices
     contour_y: y-coordinates (lat) of the contour polygon's vertices
-    latitude_weighting: whether to apply latitude weighting before summing
+    latitude_weighting: whether to apply latitude weighting (physical area) before summing
 
-    In the case of 'tcwv', we are calling this metric "volume"
-    o/w this is "amplitude".
+    If latitude_weighting is True:
+        Calculates metric in physical units (e.g., kg if input is kg/m^2).
+        Formula: Sum(Value * Cell_Area) where Cell_Area is in m^2.
+    If latitude_weighting is False:
+        Calculates simple sum of values.
     """
 
     contour_poly = Polygon(zip(contour_x, contour_y))
@@ -192,53 +261,103 @@ def get_amplitude_of_contour(data_array, contour_x, contour_y, latitude_weightin
         print("Invalid polygon for amplitude calculation.")
         return 0.0
 
+    # Calculate grid spacing (assuming uniform spacing for the cropped region)
+    # We use the absolute difference between the first two available points
+    if data_array['lat'].size > 1:
+        dlat = np.abs(data_array['lat'].values[1] - data_array['lat'].values[0])
+    else:
+        dlat = 0.25 # Default fallback if only 1 pixel, purely for safety
+
+    if data_array['lon'].size > 1:
+        dlon = np.abs(data_array['lon'].values[1] - data_array['lon'].values[0])
+    else:
+        dlon = 0.25 
+
+    dlat_rad = np.deg2rad(dlat)
+    dlon_rad = np.deg2rad(dlon)
+    R_earth = 6371000.0 # Radius of Earth in meters
+
     total_amplitude = 0.0
-    if latitude_weighting:
-        weights = np.cos(np.deg2rad(data_array['lat'].values))
-        weights /= weights.mean()  # normalize weights by their mean
-    for lat_i, lat in enumerate(data_array['lat'].values):
+
+    # Iterate through grid points
+    # Optimization: Calculate area factor per latitude row
+    for lat in data_array['lat'].values:
+        
+        # Calculate area of a grid cell at this latitude
+        if latitude_weighting:
+            lat_rad = np.deg2rad(lat)
+            # Area ~= R^2 * dlat * dlon * cos(lat)
+            cell_area = (R_earth ** 2) * dlat_rad * dlon_rad * np.cos(lat_rad)
+        
         for lon in data_array['lon'].values:
             point = Point(lon, lat)
             if contour_poly.contains(point):
+                value = data_array.sel(lat=lat, lon=lon).values
+                
                 if latitude_weighting:
-                    weight = weights[lat_i]
-                    value = data_array.sel(lat=lat, lon=lon).values * weight
+                    total_amplitude += value * cell_area
                 else:
-                    value = data_array.sel(lat=lat, lon=lon).values
-                total_amplitude += value
+                    total_amplitude += value
 
     return float(total_amplitude)
 
 def get_intensity_of_contour(data_array, contour_x, contour_y, latitude_weighting):
     """
     Helper to calculate the average intensity (mean value) of the variable within the contour.
-    First, utilizes the get_amplitude_of_contour function to get the total amplitude,
-    then divides by the number of grid points within the contour to get the mean intensity.
-
-    data_array: xarray DataArray with 'lat' and 'lon' dimensions
-    contour_x: x-coordinates (lon) of the contour polygon's vertices
-    contour_y: y-coordinates (lat) of the contour polygon's vertices
+    
+    If latitude_weighting is True:
+        Calculates Intensity = Total Mass / Total Area
+        (Sum(Value * Area) / Sum(Area))
+        
+    If latitude_weighting is False:
+        Calculates Intensity = Sum(Value) / Count(Pixels)
     """
     contour_poly = Polygon(zip(contour_x, contour_y))
     if not contour_poly.is_valid:
         print("Invalid polygon for intensity calculation.")
         return 0.0
 
-    total_amplitude = get_amplitude_of_contour(data_array, contour_x, contour_y, latitude_weighting)
+    # Calculate grid spacing
+    if data_array['lat'].size > 1:
+        dlat = np.abs(data_array['lat'].values[1] - data_array['lat'].values[0])
+    else:
+        dlat = 0.25 
 
-    # Count number of grid points within the contour
-    point_count = 0
+    if data_array['lon'].size > 1:
+        dlon = np.abs(data_array['lon'].values[1] - data_array['lon'].values[0])
+    else:
+        dlon = 0.25 
+
+    dlat_rad = np.deg2rad(dlat)
+    dlon_rad = np.deg2rad(dlon)
+    R_earth = 6371000.0 
+
+    total_amplitude = 0.0
+    total_area_or_count = 0.0
+
     for lat in data_array['lat'].values:
+        # Pre-calculate area of a grid cell at this latitude
+        if latitude_weighting:
+            lat_rad = np.deg2rad(lat)
+            cell_area = (R_earth ** 2) * dlat_rad * dlon_rad * np.cos(lat_rad)
+        
         for lon in data_array['lon'].values:
             point = Point(lon, lat)
             if contour_poly.contains(point):
-                point_count += 1
+                value = data_array.sel(lat=lat, lon=lon).values
+                
+                if latitude_weighting:
+                    total_amplitude += value * cell_area
+                    total_area_or_count += cell_area
+                else:
+                    total_amplitude += value
+                    total_area_or_count += 1
 
-    if point_count == 0:
+    if total_area_or_count == 0:
         print("No grid points found within the contour for intensity calculation.")
         return 0.0
 
-    average_intensity = total_amplitude / point_count
+    average_intensity = total_amplitude / total_area_or_count
     return float(average_intensity)
 
 def render_panel(ax, background_data, title, cmap, vmin, vmax, extent, var, ckpts=[], ckpt_num=None,
