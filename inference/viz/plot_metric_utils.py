@@ -1,9 +1,8 @@
-from cmocean import cm
 import xarray as xr
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import matplotlib.pyplot as plt
-from cmocean import cm
+from cmocean import cm ## TODO FIX CONFLICT HERE BTWN MATPLOTLIB AND CMOCEAN CM
 import os
 import re
 import numpy as np

@@ -58,14 +58,14 @@ def deterministic(
         Output IO object
     """
     # sphinx - deterministic end
-    logger.info("Running simple workflow!")
+    # logger.info("Running simple workflow!")
     # Load model onto the device
     device = (
         device
         if device is not None
         else torch.device("cuda" if torch.cuda.is_available() else "cpu")
     )
-    logger.info(f"Inference device: {device}")
+    # logger.info(f"Inference device: {device}")
     prognostic = prognostic.to(device)
     # sphinx - fetch data start
     # Fetch data from data source and load onto device
@@ -89,7 +89,7 @@ def deterministic(
         interp_method=interp_method,
     )
 
-    logger.success(f"Fetched data from {data.__class__.__name__}")
+    # logger.success(f"Fetched data from {data.__class__.__name__}")
     # sphinx - fetch data end
 
     # Set up IO backend
@@ -119,7 +119,7 @@ def deterministic(
     # Create prognostic iterator
     model = prognostic.create_iterator(x, coords)
 
-    logger.info("Inference starting!")
+    # logger.info("Inference starting!")
     with tqdm(total=nsteps + 1, desc="Running inference", position=1) as pbar:
         for step, (x, coords) in enumerate(model):
             # Subselect domain/variables as indicated in output_coords
@@ -143,5 +143,5 @@ def deterministic(
             if step == nsteps:
                 break
 
-    logger.success("Inference complete")
+    # logger.success("Inference complete")
     return io

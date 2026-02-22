@@ -1,4 +1,4 @@
-#### Disable loguru and tqdm outputs globally to reduce unnessecary output to log file ####
+#### Disable loguru and tqdm outputs globally to reduce unnessecary output to log file
 from loguru import logger; import sys
 
 # Remove the default logger that prints to the console
@@ -11,8 +11,8 @@ from tqdm import tqdm; from functools import partialmethod
 
 # Force all tqdm bars to be disabled by default 
 tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
-####
 
+#### Imports
 import os
 import subprocess
 from dotenv import load_dotenv
@@ -37,7 +37,7 @@ import time
 
 import torch
 
-# Check if CUDA (GPU support) is available
+### CUDA Setup
 is_available = torch.cuda.is_available()
 print(f"Is CUDA available? {is_available}")
 
@@ -58,8 +58,7 @@ if is_available:
 else:
     print("CUDA is not available. Running on CPU.")
 
-############# CONFIGURATIONS #############
-
+### CONFIGURATIONS
 if len(sys.argv) > 1:
     # If provided a number (e.g., "3"), use it as the experiment number
     experiment_number = int(sys.argv[1])
